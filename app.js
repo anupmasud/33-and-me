@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "15";
+  const APP_VERSION = "16";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -474,6 +474,38 @@
     } finally { setBusy(false); }
   }
 
+  // ---------- currency conversion ----------
+  // Rates are USD-based (units of a currency per 1 USD), cached for the day.
+  let RATES = null;
+  async function getRates() {
+    const cached = RATES || (() => { try { return JSON.parse(localStorage.getItem("rates33") || "null"); } catch (_) { return null; } })();
+    if (cached && cached.rates && (Date.now() - cached.ts < 12 * 3600 * 1000)) { RATES = cached; return RATES; }
+    const resp = await fetch("https://open.er-api.com/v6/latest/USD");
+    const data = await resp.json();
+    if (!data || data.result !== "success" || !data.rates) throw new Error("rates unavailable");
+    RATES = { rates: data.rates, ts: Date.now() };
+    try { localStorage.setItem("rates33", JSON.stringify(RATES)); } catch (_) {}
+    return RATES;
+  }
+  // Convert an amount in `currency` to USD; returns a number or null if it can't.
+  async function toUSD(amount, currency) {
+    const amt = parseFloat(String(amount == null ? "" : amount).replace(/[^0-9.\-]/g, ""));
+    if (!isFinite(amt)) return null;
+    const cur = String(currency || "").trim().toUpperCase();
+    if (!cur || cur === "USD") return amt;
+    const r = await getRates();
+    const rate = r.rates[cur];
+    if (!rate) return null;
+    return amt / rate;
+  }
+  // Refresh the read-only "Cost (USD)" field from the current price/currency inputs.
+  async function updateCostUsd() {
+    const f = $("#add-form");
+    if (!f.costusd) return;
+    const usd = await toUSD(f.price.value, f.currency.value).catch(() => null);
+    f.costusd.value = usd == null ? "" : usd.toFixed(2);
+  }
+
   async function addRecord(f) {
     const width = state.headers.length;
     const row = new Array(width).fill("");
@@ -483,7 +515,8 @@
     put("Artist", f.artist); put("Album Name", f.title); put("Genre", f.genre);
     put("Location", f.location); put("City", f.city); put("Country", f.country); put("Year", f.year);
     put("Date", f.date); put("Original Cost", f.price); put("Original Currency", f.currency);
-    if (norm(f.currency) === "usd") put("Cost (USD)", f.price);
+    const usd = await toUSD(f.price, f.currency).catch(() => null);
+    if (usd != null) put("Cost (USD)", usd.toFixed(2));
     put("Format", f.format); put("Condition", f.condition); put("Notes", f.notes);
     put("Listen Count", "0");
 
@@ -543,6 +576,7 @@
         condition: g("Condition"),
         price: g("Original Cost") === "" ? "" : String(g("Original Cost")),
         currency: g("Original Currency"),
+        costusd: g("Cost (USD)") === "" ? "" : String(g("Cost (USD)")),
         date: toISODate(g("Date")),
         notes: g("Notes"),
       }, item.row);
@@ -656,7 +690,8 @@
     set("Album Name", f.title); set("Title", f.title); // whichever column the sheet uses
     set("Genre", f.genre); set("Location", f.location); set("City", f.city); set("Country", f.country); set("Year", f.year);
     set("Date", f.date); set("Original Cost", f.price); set("Original Currency", f.currency);
-    if (norm(f.currency) === "usd") set("Cost (USD)", f.price);
+    const usd = await toUSD(f.price, f.currency).catch(() => null);
+    if (usd != null) set("Cost (USD)", usd.toFixed(2));
     set("Format", f.format); set("Condition", f.condition); set("Notes", f.notes);
     // Listen Count / Last Listened / SN are intentionally left untouched.
 
@@ -1113,6 +1148,7 @@
       if (prefill.country !== undefined) form.country.value = prefill.country || "";
       if (prefill.price !== undefined) form.price.value = prefill.price || "";
       if (prefill.currency) form.currency.value = prefill.currency;
+      if (form.costusd) form.costusd.value = prefill.costusd || "";
       if (prefill.date) form.date.value = prefill.date;
       if (prefill.notes !== undefined) form.notes.value = prefill.notes || "";
     }
@@ -1292,6 +1328,8 @@
       }));
     $("#add-form").artist.addEventListener("input", checkDup);
     $("#add-form").title.addEventListener("input", checkDup);
+    $("#add-form").price.addEventListener("input", updateCostUsd);
+    $("#add-form").currency.addEventListener("input", updateCostUsd);
 
     $("#add-form").addEventListener("submit", (ev) => {
       ev.preventDefault();

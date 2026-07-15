@@ -148,6 +148,8 @@ button { font-family: inherit; }
 .detail-list dd { color: var(--sleeve); font-size: 14px; margin: 0; word-break: break-word; }
 .detail-empty { color: var(--sleeve-dim); font-style: italic; }
 .req-star { color: var(--gold); }
+.field-hint { color: var(--sleeve-dim); font-weight: 400; font-size: 12px; }
+.form input[readonly] { opacity: .65; cursor: default; }
 .admin-head { display: flex; justify-content: space-between; color: var(--sleeve-dim); font-size: 12px; margin-bottom: 4px; }
 .admin-fields { max-height: 46vh; overflow-y: auto; margin-bottom: 14px; }
 .admin-field { display: flex; align-items: center; gap: 12px; padding: 4px 0; }

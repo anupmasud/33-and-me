@@ -106,6 +106,9 @@
           <label><span data-fl="price"></span><span data-req="price" class="req-star"> *</span><input name="price" inputmode="decimal" autocomplete="off" /></label>
           <label><span data-fl="currency"></span><span data-req="currency" class="req-star"> *</span><input name="currency" value="EUR" autocomplete="off" /></label>
         </div>
+        <label>Cost (USD) <span class="field-hint">— auto-converted at today's rate</span>
+          <input name="costusd" readonly tabindex="-1" placeholder="—" />
+        </label>
         <div class="grid2">
           <label><span data-fl="year"></span><span data-req="year" class="req-star"> *</span><input name="year" inputmode="numeric" autocomplete="off" /></label>
           <label><span data-fl="date"></span><span data-req="date" class="req-star"> *</span><input name="date" type="date" /></label>
