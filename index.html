@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>33&Me — My Record Collection</title>
+  <meta name="description" content="Personal vinyl collection and wishlist" />
+  <meta name="theme-color" content="#17120E" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ===================== Sign-in screen ===================== -->
+  <section id="signin-view" class="signin hidden">
+    <div class="signin-disc" aria-hidden="true">
+      <div class="disc spinning"><span class="disc-label">33</span></div>
+    </div>
+    <h1 class="wordmark">33<span class="amp">&amp;</span>Me</h1>
+    <p class="tagline">Your crates, in your pocket.</p>
+    <button id="signin-btn" class="btn btn-primary">Sign in with Google</button>
+    <p id="signin-error" class="signin-note hidden"></p>
+    <p class="signin-note">33&amp;Me reads and writes only your collection spreadsheet. Nothing is stored anywhere else.</p>
+  </section>
+
+  <!-- ===================== Main app ===================== -->
+  <div id="app-view" class="app hidden">
+    <header class="topbar">
+      <div class="brand">
+        <div id="sync-disc" class="disc disc-small" title="Sync status"><span class="disc-label">33</span></div>
+        <span class="brand-name">33<span class="amp">&amp;</span>Me</span>
+      </div>
+      <div class="topbar-right">
+        <span id="offline-badge" class="offline-badge hidden">Offline — showing last sync</span>
+        <button id="refresh-btn" class="icon-btn" title="Refresh from sheet" aria-label="Refresh">⟳</button>
+      </div>
+    </header>
+
+    <div class="searchwrap">
+      <input id="search-input" class="search" type="search" autocomplete="off"
+             placeholder="Artist, album, or genre…" aria-label="Search collection and wishlist" />
+      <div class="segments" role="tablist" aria-label="Filter results">
+        <button class="segment active" data-scope="all" role="tab">All</button>
+        <button class="segment" data-scope="collection" role="tab">Collection</button>
+        <button class="segment" data-scope="wishlist" role="tab">Wishlist</button>
+      </div>
+    </div>
+
+    <main id="results" class="results" aria-live="polite"></main>
+
+    <button id="add-btn" class="fab" aria-label="Add record or wish">+</button>
+
+    <footer class="statusbar">
+      <span id="count-line"></span>
+      <button id="signout-btn" class="linklike">Sign out</button>
+    </footer>
+  </div>
+
+  <!-- ===================== Add sheet (record / wish) ===================== -->
+  <div id="sheet-backdrop" class="backdrop hidden"></div>
+  <section id="add-sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="add-title">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="segments sheet-segments">
+      <button class="segment active" data-addmode="record">Add record</button>
+      <button class="segment" data-addmode="wish">Add wish</button>
+    </div>
+    <h2 id="add-title" class="visually-hidden">Add</h2>
+    <p id="dup-warning" class="dup hidden"></p>
+
+    <form id="add-form" class="form" novalidate>
+      <div class="grid2">
+        <label>Artist *<input name="artist" required autocomplete="off" /></label>
+        <label>Title <span class="req-record">*</span><input name="title" autocomplete="off" /></label>
+      </div>
+      <div class="grid2 record-only">
+        <label>Format *
+          <select name="format">
+            <option>LP</option><option>2xLP</option><option>EP</option>
+            <option>7"</option><option>10"</option><option>Box set</option>
+          </select>
+        </label>
+        <label>Condition *
+          <select name="condition"><option>Used</option><option>New</option></select>
+        </label>
+      </div>
+      <div class="grid2">
+        <label>Genre<input name="genre" autocomplete="off" list="genre-list" /></label>
+        <label class="record-only">Year<input name="year" inputmode="numeric" autocomplete="off" /></label>
+      </div>
+      <datalist id="genre-list"></datalist>
+      <div class="record-only">
+        <label>Where bought *<input name="location" placeholder="Shop, city" autocomplete="off" /></label>
+        <div class="grid3">
+          <label>Price *<input name="price" inputmode="decimal" autocomplete="off" /></label>
+          <label>Currency *<input name="currency" value="EUR" autocomplete="off" /></label>
+          <label>Date *<input name="date" type="date" /></label>
+        </div>
+      </div>
+      <label>Notes<textarea name="notes" rows="2" placeholder="e.g. brought over by a friend"></textarea></label>
+      <div class="form-actions">
+        <button type="button" id="cancel-add" class="btn">Cancel</button>
+        <button type="submit" id="save-add" class="btn btn-primary">Save record</button>
+      </div>
+    </form>
+  </section>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <script src="config.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="app.js"></script>
+</body>
+</html>
