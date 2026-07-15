@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "13";
+  const APP_VERSION = "14";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -88,6 +88,7 @@
     pendingWishRow: null,   // wish row to delete after "Got it" save
     editRow: null,          // collection row being edited (null = adding)
     editWishRow: null,      // wishlist row being edited (null = adding)
+    editItem: null,         // full record object being edited (for edit-page delete)
     detailItem: null,       // record shown in the detail view
     busy: 0,
   };
@@ -461,6 +462,7 @@
         date: toISODate(g("Date")),
         notes: g("Notes"),
       }, item.row);
+      state.editItem = item; // set after openSheet (which clears it)
     } catch (e) {
       toast("Couldn't load that record to edit — are you online?");
     } finally { setBusy(false); }
@@ -530,7 +532,7 @@
   }
 
   async function deleteRecord(item) {
-    if (!confirm(`Delete "${item.title || item.artist}"? This removes the row from your sheet.`)) return;
+    if (!confirm(`Delete "${item.title || item.artist}"? This removes the row from your sheet.`)) return false;
     setBusy(true);
     try {
       await api(":batchUpdate", {
@@ -549,8 +551,10 @@
       await loadData();
       toast("Record deleted");
       render();
+      return true;
     } catch (e) {
       toast("Couldn't delete — are you online?");
+      return false;
     } finally { setBusy(false); }
   }
 
@@ -888,7 +892,7 @@
       colHits.slice(0, 80).forEach((i, idx) => {
         out.push(`<div class="card rec">
           <div class="card-main">
-            <div class="card-title">${esc(i.title)}</div>
+            <div class="card-title"><button class="title-link" data-view="${idx}">${esc(i.title)}</button></div>
             <div class="card-artist">${esc(i.artist)}</div>
             <div class="card-meta">${esc([i.genre, i.format, i.year, i.location, i.city, i.country].filter(Boolean).join(" · "))}</div>
             ${i.notes ? `<div class="card-notes">${esc(i.notes)}</div>` : ""}
@@ -896,9 +900,7 @@
           <div class="rec-actions">
             <button class="listen-btn" data-listen="${idx}">♪ Listened</button>
             <div class="listen-meta">${i.listens ? `${i.listens}× · ${esc(i.lastListened || "")}` : "never played"}</div>
-            <button class="chip-btn" data-view="${idx}">Details</button>
             <button class="chip-btn" data-edit="${idx}">Edit</button>
-            <button class="chip-btn danger" data-del="${idx}">Delete</button>
           </div>
         </div>`);
       });
@@ -942,6 +944,7 @@
   function openSheet(mode, prefill, editRow, editWishRow) {
     state.editRow = editRow || null;
     state.editWishRow = editWishRow || null;
+    state.editItem = null; // openEdit re-sets this after calling openSheet
     state.addMode = mode || "record";
     $("#add-sheet").classList.remove("hidden");
     $("#sheet-backdrop").classList.remove("hidden");
@@ -971,6 +974,8 @@
     }
     if (state.editRow) $("#save-add").textContent = "Update record";
     if (state.editWishRow) $("#save-add").textContent = "Update wish";
+    // Delete only makes sense when editing an existing record.
+    $("#delete-record").classList.toggle("hidden", !state.editRow);
     // genre suggestions: the curated list plus any genres already in the sheet
     const genres = [...new Set([...GENRE_VALUES, ...state.collection.map((i) => i.genre)].filter(Boolean))].sort();
     $("#genre-list").innerHTML = genres.map((g) => `<option value="${esc(g)}">`).join("");
@@ -994,6 +999,7 @@
     state.pendingWishRow = null;
     state.editRow = null;
     state.editWishRow = null;
+    state.editItem = null;
   }
 
   function checkDup() {
@@ -1114,6 +1120,14 @@
       closeDetail();
       if (it) openEdit(it);
     });
+    $("#detail-delete").addEventListener("click", async () => {
+      const it = state.detailItem;
+      if (it && await deleteRecord(it)) closeDetail();
+    });
+    $("#delete-record").addEventListener("click", async () => {
+      const it = state.editItem;
+      if (it && await deleteRecord(it)) closeSheet();
+    });
     $("#sheet-backdrop").addEventListener("click", () => {
       closeSheet();
       closeDetail();
@@ -1169,7 +1183,6 @@
       if (btn.dataset.listen !== undefined) markListened(render._colHits[+btn.dataset.listen]);
       else if (btn.dataset.view !== undefined) openDetail(render._colHits[+btn.dataset.view]);
       else if (btn.dataset.edit !== undefined) openEdit(render._colHits[+btn.dataset.edit]);
-      else if (btn.dataset.del !== undefined) deleteRecord(render._colHits[+btn.dataset.del]);
       else if (btn.dataset.got !== undefined) {
         const w = render._wishHits[+btn.dataset.got];
         state.pendingWishRow = w.row;

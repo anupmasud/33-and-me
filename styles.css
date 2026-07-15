@@ -7,7 +7,8 @@
   --crate-2: #2F251B;     /* raised surfaces */
   --sleeve: #F2E9DC;      /* primary text */
   --sleeve-dim: #B5A895;  /* secondary text */
-  --gold: #E8A33D;        /* accent: collection / actions */
+  --gold: #D2662E;        /* accent: burnt orange — collection / actions */
+  --gold-soft: rgba(210,102,46,.12);
   --sage: #8FBCA6;        /* accent: wishlist */
   --line: #3A2E21;
   --danger: #C96F5D;
@@ -71,6 +72,7 @@ button { font-family: inherit; }
   padding: 12px 22px; border-radius: 999px; font-size: 16px; font-weight: 600; cursor: pointer;
 }
 .btn-primary { background: var(--gold); border-color: var(--gold); color: var(--wax); }
+.btn-danger { background: transparent; border-color: var(--danger); color: var(--danger); }
 .btn:active { transform: translateY(1px); }
 .icon-btn {
   background: none; border: none; color: var(--sleeve-dim);
@@ -121,6 +123,11 @@ button { font-family: inherit; }
 .card.rec  { border-left: 3px solid var(--gold); }
 .card-main { flex: 1; min-width: 0; }
 .card-title { font-weight: 700; font-size: 16px; }
+.title-link {
+  background: none; border: none; padding: 0; margin: 0; text-align: left;
+  font: inherit; font-weight: 700; color: var(--gold); cursor: pointer;
+}
+.title-link:hover { text-decoration: underline; }
 .card-artist { color: var(--sleeve); }
 .card-meta { color: var(--sleeve-dim); font-size: 13px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; }
 .card-notes { color: var(--sleeve-dim); font-size: 13px; font-style: italic; margin-top: 2px; }
@@ -177,7 +184,7 @@ button { font-family: inherit; }
 .sheet-handle { width: 42px; height: 4px; border-radius: 2px; background: var(--line); margin: 4px auto 12px; }
 .sheet-segments { margin-bottom: 14px; }
 .dup {
-  background: rgba(232,163,61,.12); border: 1px solid var(--gold); color: var(--gold);
+  background: var(--gold-soft); border: 1px solid var(--gold); color: var(--gold);
   border-radius: 10px; padding: 8px 12px; font-size: 13px; margin: 0 0 12px;
 }
 .form { display: flex; flex-direction: column; gap: 12px; }
