@@ -30,7 +30,7 @@
     "Soundtrack", "Spanish", "Spoken Word", "Synth-Pop", "Techno", "Traditional",
     "West African", "Western Classical", "Western Soundtrack", "World",
   ];
-  const VALIDATION_VERSION = "v3";
+  const VALIDATION_VERSION = "v4";
 
   // ---------- state ----------
   const state = {
@@ -197,13 +197,17 @@
         const applied = await fixValidation();
         if (applied) {
           localStorage.setItem(flag, "1");
+          console.log("33&Me: dropdown validation applied ✓");
           toast("Sheet dropdowns updated ✓");
         } else {
-          toast("Dropdown fix skipped: Condition/Rating/Format/Genre columns not found");
+          console.warn("33&Me: dropdown validation SKIPPED — none of Condition/Rating/Format/Genre matched. Your header row is:", state.headers);
+          toast("Dropdown fix skipped: column names didn't match (see console)", 6000);
         }
+      } else {
+        console.log("33&Me: dropdown validation already applied on this device (flag", flag + ")");
       }
     } catch (e) {
-      console.error("Dropdown validation fix failed:", e);
+      console.error("33&Me: dropdown validation FAILED:", e);
       toast("Dropdown fix failed: " + String(e.message || e).slice(0, 120), 6000);
     }
   }
@@ -719,6 +723,7 @@
   }
 
   function start() {
+    console.log("33&Me build loaded — validation", VALIDATION_VERSION);
     wire();
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});
