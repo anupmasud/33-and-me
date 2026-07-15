@@ -30,7 +30,7 @@
     "Soundtrack", "Spanish", "Spoken Word", "Synth-Pop", "Techno", "Traditional",
     "West African", "Western Classical", "Western Soundtrack", "World",
   ];
-  const VALIDATION_VERSION = "v2";
+  const VALIDATION_VERSION = "v3";
 
   // ---------- state ----------
   const state = {
@@ -189,16 +189,22 @@
     state.col = {};
     headers.forEach((h, i) => { state.col[h] = i; });
 
-    // Correct the Condition/Rating dropdowns (once per device per version).
+    // Correct the Condition/Rating/Format/Genre dropdowns (once per device per
+    // version). Never block loading over it, but surface the result visibly.
     try {
       const flag = "valfix33:" + C.SPREADSHEET_ID + ":" + VALIDATION_VERSION;
       if (!localStorage.getItem(flag)) {
-        await fixValidation();
-        localStorage.setItem(flag, "1");
+        const applied = await fixValidation();
+        if (applied) {
+          localStorage.setItem(flag, "1");
+          toast("Sheet dropdowns updated ✓");
+        } else {
+          toast("Dropdown fix skipped: Condition/Rating/Format/Genre columns not found");
+        }
       }
     } catch (e) {
-      // Best-effort; never block loading over it — but log so it's diagnosable.
       console.error("Dropdown validation fix failed:", e);
+      toast("Dropdown fix failed: " + String(e.message || e).slice(0, 120), 6000);
     }
   }
 
@@ -226,9 +232,9 @@
     rule("Rating", RATING_VALUES);
     rule("Format", FORMAT_VALUES);
     rule("Genre", GENRE_VALUES);
-    if (requests.length) {
-      await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests }) });
-    }
+    if (!requests.length) return false;
+    await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests }) });
+    return true;
   }
 
   function hv(row, name) { // header value
