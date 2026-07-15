@@ -120,24 +120,36 @@
 
   const q = encodeURIComponent;
 
+  // Google Sheets treats tab names case-insensitively for uniqueness,
+  // so match the same way (and ignore stray whitespace).
+  const sameName = (a, b) =>
+    (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
+
   async function ensureSetup() {
-    const meta = await api("?fields=sheets.properties");
-    const sheets = meta.sheets.map((s) => s.properties);
+    let sheets = (await api("?fields=sheets.properties")).sheets.map((s) => s.properties);
     state.collectionSheet =
-      sheets.find((s) => s.title === C.COLLECTION_SHEET) || sheets[0];
-    state.wishlistSheet = sheets.find((s) => s.title === C.WISHLIST_SHEET) || null;
+      sheets.find((s) => sameName(s.title, C.COLLECTION_SHEET)) || sheets[0];
+    state.wishlistSheet = sheets.find((s) => sameName(s.title, C.WISHLIST_SHEET)) || null;
 
     // create Wishlist tab if missing
     if (!state.wishlistSheet) {
-      const r = await api(":batchUpdate", {
-        method: "POST",
-        body: JSON.stringify({ requests: [{ addSheet: { properties: { title: C.WISHLIST_SHEET } } }] }),
-      });
-      state.wishlistSheet = r.replies[0].addSheet.properties;
-      await api("/values/" + q(`${C.WISHLIST_SHEET}!A1`) + "?valueInputOption=USER_ENTERED", {
-        method: "PUT",
-        body: JSON.stringify({ values: [WISH_HEADER] }),
-      });
+      try {
+        const r = await api(":batchUpdate", {
+          method: "POST",
+          body: JSON.stringify({ requests: [{ addSheet: { properties: { title: C.WISHLIST_SHEET } } }] }),
+        });
+        state.wishlistSheet = r.replies[0].addSheet.properties;
+        await api("/values/" + q(`${state.wishlistSheet.title}!A1`) + "?valueInputOption=USER_ENTERED", {
+          method: "PUT",
+          body: JSON.stringify({ values: [WISH_HEADER] }),
+        });
+      } catch (e) {
+        // A tab differing only by case can slip past the check above and make
+        // addSheet fail with "already exists" — re-read the tabs and use it.
+        sheets = (await api("?fields=sheets.properties")).sheets.map((s) => s.properties);
+        state.wishlistSheet = sheets.find((s) => sameName(s.title, C.WISHLIST_SHEET)) || null;
+        if (!state.wishlistSheet) throw e;
+      }
     }
 
     // ensure app columns exist on the collection header row
@@ -165,7 +177,7 @@
   async function loadData() {
     const t = state.collectionSheet.title;
     const data = await api(
-      "/values:batchGet?ranges=" + q(t) + "&ranges=" + q(C.WISHLIST_SHEET) +
+      "/values:batchGet?ranges=" + q(t) + "&ranges=" + q(state.wishlistSheet.title) +
       "&majorDimension=ROWS"
     );
     const [colRange, wishRange] = data.valueRanges;
@@ -266,7 +278,7 @@
   async function addWish(f) {
     setBusy(true);
     try {
-      await api("/values/" + q(C.WISHLIST_SHEET) + ":append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS", {
+      await api("/values/" + q(state.wishlistSheet.title) + ":append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS", {
         method: "POST",
         body: JSON.stringify({ values: [[f.artist, f.title, f.genre, f.notes, todayISO()]] }),
       });
