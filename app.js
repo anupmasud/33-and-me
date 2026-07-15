@@ -8,6 +8,10 @@
   const C = window.CONFIG;
   const API = "https://sheets.googleapis.com/v4/spreadsheets/" + C.SPREADSHEET_ID;
 
+  // Shown in the footer so you can tell which build you're running. Bump this
+  // (and the SW cache in sw.js) on each deploy.
+  const APP_VERSION = "10";
+
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
   const WISH_HEADER = ["Artist", "Title", "Genre", "Notes", "Added"];
@@ -1061,7 +1065,9 @@
   }
 
   function start() {
-    console.log("33&Me build loaded — validation", VALIDATION_VERSION);
+    console.log("33&Me build loaded — app v" + APP_VERSION + ", validation " + VALIDATION_VERSION);
+    const ver = $("#app-version");
+    if (ver) ver.textContent = "v" + APP_VERSION;
     wire();
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});

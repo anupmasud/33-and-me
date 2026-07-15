@@ -2,7 +2,7 @@
    (and search over the last sync works) inside a record store
    with no signal. API calls are never cached here; data caching
    is handled in localStorage by app.js. */
-const CACHE = "me33-shell-v9";
+const CACHE = "me33-shell-v10";
 const SHELL = [
   ".", "index.html", "styles.css", "app.js", "config.js",
   "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png",

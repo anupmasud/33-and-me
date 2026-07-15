@@ -132,7 +132,8 @@ button { font-family: inherit; }
 .listen-meta { font-size: 11px; color: var(--sleeve-dim); text-align: center; margin-top: 4px; }
 .rec-actions { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 .rec-actions .chip-btn { text-align: center; }
-.statusbar-actions { display: flex; gap: 16px; }
+.statusbar-actions { display: flex; align-items: center; gap: 16px; }
+.app-version { font-size: 11px; color: var(--sleeve-dim); opacity: 0.7; }
 .wish-actions { display: flex; flex-direction: column; gap: 6px; }
 .chip-btn {
   border: 1px solid var(--line); background: transparent; color: var(--sleeve-dim);
