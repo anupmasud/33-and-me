@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "14";
+  const APP_VERSION = "15";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -71,6 +71,37 @@
     "Vietnam", "Yemen", "Zambia", "Zimbabwe",
   ];
   const VALIDATION_VERSION = "v6";
+
+  // ---------- admin settings (Phase 1) ----------
+  // Editable per-field settings. Defaults here; overrides load from a hidden
+  // "33Settings" tab in the sheet so they travel with the data. Field keys match
+  // the form input names.
+  const SETTINGS_SHEET = "33Settings";
+  const FIELD_DEFS = [
+    { key: "artist", label: "Artist", req: true, mode: "both" },
+    { key: "title", label: "Title", req: true, mode: "both" },
+    { key: "genre", label: "Genre", req: false, mode: "both" },
+    { key: "format", label: "Format", req: true, mode: "record" },
+    { key: "condition", label: "Condition", req: true, mode: "record" },
+    { key: "location", label: "Where bought", req: true, mode: "record" },
+    { key: "city", label: "City", req: false, mode: "record" },
+    { key: "country", label: "Country", req: false, mode: "record" },
+    { key: "price", label: "Price", req: true, mode: "record" },
+    { key: "currency", label: "Currency", req: true, mode: "record" },
+    { key: "year", label: "Year Bought", req: false, mode: "record" },
+    { key: "date", label: "Date bought", req: true, mode: "record" },
+    { key: "notes", label: "Notes", req: false, mode: "both" },
+  ];
+  const DATE_FORMATS = ["yyyy-mm-dd", "dd/mm/yyyy", "mm/dd/yyyy", "d mmm yyyy"];
+  const defaultSettings = () => ({
+    labels: Object.fromEntries(FIELD_DEFS.map((f) => [f.key, f.label])),
+    required: Object.fromEntries(FIELD_DEFS.map((f) => [f.key, f.req])),
+    dateFormat: "yyyy-mm-dd",
+    currency: "EUR",
+  });
+  let SETTINGS = defaultSettings();
+  const labelOf = (key) => (SETTINGS.labels && SETTINGS.labels[key]) || key;
+  const requiredOf = (key) => !!(SETTINGS.required && SETTINGS.required[key]);
 
   // ---------- state ----------
   const state = {
@@ -306,9 +337,10 @@
         },
       });
     };
+    const datePattern = SETTINGS.dateFormat || "yyyy-mm-dd";
     fmt("Listen Count", { type: "NUMBER", pattern: "0" });
-    fmt("Last Listened", { type: "DATE", pattern: "yyyy-mm-dd" });
-    fmt("Date", { type: "DATE", pattern: "yyyy-mm-dd" });
+    fmt("Last Listened", { type: "DATE", pattern: datePattern });
+    fmt("Date", { type: "DATE", pattern: datePattern });
 
     await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests }) });
     return true;
@@ -361,6 +393,58 @@
       if (c) { state.collection = c.collection; state.wishlist = c.wishlist; return true; }
     } catch (_) {}
     return false;
+  }
+
+  // ---------- settings persistence ----------
+  async function loadSettings() {
+    SETTINGS = defaultSettings();
+    try {
+      const resp = await api("/values/" + q(SETTINGS_SHEET + "!A1"));
+      const raw = resp.values && resp.values[0] && resp.values[0][0];
+      if (raw) {
+        const p = JSON.parse(raw);
+        SETTINGS = {
+          labels: { ...SETTINGS.labels, ...(p.labels || {}) },
+          required: { ...SETTINGS.required, ...(p.required || {}) },
+          dateFormat: p.dateFormat || SETTINGS.dateFormat,
+          currency: p.currency || SETTINGS.currency,
+        };
+      }
+    } catch (_) { /* tab/cell missing → defaults */ }
+    applySettings();
+  }
+
+  async function saveSettings() {
+    // Ensure the (hidden) settings tab exists, then write the JSON blob to A1.
+    try {
+      await api(":batchUpdate", {
+        method: "POST",
+        body: JSON.stringify({ requests: [{ addSheet: { properties: { title: SETTINGS_SHEET, hidden: true } } }] }),
+      });
+    } catch (_) { /* already exists */ }
+    await api("/values/" + q(SETTINGS_SHEET + "!A1") + "?valueInputOption=RAW", {
+      method: "PUT",
+      body: JSON.stringify({ values: [[JSON.stringify(SETTINGS)]] }),
+    });
+  }
+
+  // Push current settings into the form labels / required markers / defaults.
+  function applySettings() {
+    FIELD_DEFS.forEach((fd) => {
+      const lbl = document.querySelector(`[data-fl="${fd.key}"]`);
+      if (lbl) lbl.textContent = labelOf(fd.key);
+      const req = document.querySelector(`[data-req="${fd.key}"]`);
+      if (req) req.classList.toggle("hidden", !requiredOf(fd.key));
+    });
+  }
+
+  // First required field (record mode) left empty → its label, else null.
+  function missingRequired(data) {
+    for (const fd of FIELD_DEFS) {
+      if (!requiredOf(fd.key)) continue;
+      if (!String(data[fd.key] == null ? "" : data[fd.key]).trim()) return labelOf(fd.key);
+    }
+    return null;
   }
 
   // ---------- actions ----------
@@ -469,7 +553,19 @@
   }
 
   // Friendlier labels for a few columns in the read-only detail view.
-  const DETAIL_LABELS = { "Year": "Year Bought", "Date": "Date bought", "Album Name": "Title" };
+  // Map a sheet column header to its configurable display label for the detail view.
+  const FIELD_COLS = {
+    artist: "Artist", title: "Album Name", genre: "Genre", format: "Format",
+    condition: "Condition", location: "Location", city: "City", country: "Country",
+    price: "Original Cost", currency: "Original Currency", year: "Year", date: "Date", notes: "Notes",
+  };
+  function columnLabel(header) {
+    for (const [key, col] of Object.entries(FIELD_COLS)) {
+      if (col === header) return labelOf(key);
+    }
+    if (header === "Title") return labelOf("title");
+    return header;
+  }
 
   async function openDetail(item) {
     const t = state.collectionSheet.title;
@@ -484,7 +580,7 @@
         if (h === "Artist" || h === "Album Name" || h === "Title") return; // shown in the header
         const v = (vals[i] == null ? "" : String(vals[i])).trim();
         if (!v) return;
-        rows.push(`<dt>${esc(DETAIL_LABELS[h] || h)}</dt><dd>${esc(v)}</dd>`);
+        rows.push(`<dt>${esc(columnLabel(h))}</dt><dd>${esc(v)}</dd>`);
       });
       $("#detail-list").innerHTML = rows.join("") || `<dd class="detail-empty">No other details recorded.</dd>`;
       state.detailItem = item;
@@ -499,6 +595,53 @@
     $("#detail-modal").classList.add("hidden");
     $("#sheet-backdrop").classList.add("hidden");
     state.detailItem = null;
+  }
+
+  // ---------- admin settings UI ----------
+  function renderAdmin(s) {
+    $("#admin-fields").innerHTML = FIELD_DEFS.map((fd) => `
+      <div class="admin-field">
+        <input class="admin-label" data-akey="${fd.key}" value="${esc(s.labels[fd.key] || fd.label)}" aria-label="Label for ${esc(fd.key)}" />
+        <label class="admin-req"><input type="checkbox" data-areq="${fd.key}" ${s.required[fd.key] ? "checked" : ""} /></label>
+      </div>`).join("");
+    $("#admin-dateformat").innerHTML = DATE_FORMATS
+      .map((f) => `<option ${f === s.dateFormat ? "selected" : ""}>${f}</option>`).join("");
+    $("#admin-currency").value = s.currency;
+  }
+
+  function openAdmin() {
+    renderAdmin(SETTINGS);
+    $("#admin-modal").classList.remove("hidden");
+    $("#sheet-backdrop").classList.remove("hidden");
+  }
+
+  function closeAdmin() {
+    $("#admin-modal").classList.add("hidden");
+    $("#sheet-backdrop").classList.add("hidden");
+  }
+
+  async function saveAdmin() {
+    const prevDateFormat = SETTINGS.dateFormat;
+    FIELD_DEFS.forEach((fd) => {
+      const lin = document.querySelector(`.admin-label[data-akey="${fd.key}"]`);
+      const cb = document.querySelector(`[data-areq="${fd.key}"]`);
+      if (lin) SETTINGS.labels[fd.key] = lin.value.trim() || fd.label;
+      if (cb) SETTINGS.required[fd.key] = cb.checked;
+    });
+    SETTINGS.dateFormat = $("#admin-dateformat").value || "yyyy-mm-dd";
+    SETTINGS.currency = $("#admin-currency").value.trim() || "EUR";
+    applySettings();
+    setBusy(true);
+    try {
+      await saveSettings();
+      if (SETTINGS.dateFormat !== prevDateFormat) {
+        await fixValidation().catch(() => {}); // re-apply the new date format to the sheet
+      }
+      toast("Settings saved ✓");
+      closeAdmin();
+    } catch (e) {
+      toast("Couldn't save settings — are you online?");
+    } finally { setBusy(false); }
   }
 
   async function updateRecord(row, f) {
@@ -956,6 +1099,7 @@
     const form = $("#add-form");
     form.reset();
     form.date.value = todayISO();
+    form.currency.value = SETTINGS.currency; // configurable default (prefill overrides)
     if (prefill) {
       form.artist.value = prefill.artist || "";
       form.title.value = prefill.title || "";
@@ -1062,6 +1206,7 @@
     setBusy(true);
     try {
       await ensureSetup();
+      await loadSettings().catch(() => {}); // non-fatal
       await loadData();
       $("#offline-badge").classList.add("hidden");
       render();
@@ -1128,9 +1273,14 @@
       const it = state.editItem;
       if (it && await deleteRecord(it)) closeSheet();
     });
+    $("#admin-btn").addEventListener("click", openAdmin);
+    $("#admin-close").addEventListener("click", closeAdmin);
+    $("#admin-save").addEventListener("click", saveAdmin);
+    $("#admin-reset").addEventListener("click", () => renderAdmin(defaultSettings()));
     $("#sheet-backdrop").addEventListener("click", () => {
       closeSheet();
       closeDetail();
+      closeAdmin();
       if (state.sheetId) closeSheetModal(); // don't let them dismiss the mandatory first-run picker
     });
     $("#cancel-add").addEventListener("click", closeSheet);
@@ -1156,18 +1306,16 @@
         notes: f.notes.value.trim(),
       };
       if (state.editRow) {
-        if (!data.artist || !data.title) return toast("Artist and title are required");
-        if (!data.location || !data.price || !data.currency || !data.date)
-          return toast("Purchase info is required (where, price, currency, date)");
+        const miss = missingRequired(data);
+        if (miss) return toast(miss + " is required");
         updateRecord(state.editRow, data);
       } else if (state.editWishRow) {
         if (!data.artist && !data.title && !data.genre)
           return toast("Give the wish at least an artist, title, or genre");
         updateWish(state.editWishRow, data);
       } else if (state.addMode === "record") {
-        if (!data.artist || !data.title) return toast("Artist and title are required");
-        if (!data.location || !data.price || !data.currency || !data.date)
-          return toast("Purchase info is required (where, price, currency, date)");
+        const miss = missingRequired(data);
+        if (miss) return toast(miss + " is required");
         addRecord(data);
       } else {
         if (!data.artist && !data.title && !data.genre)
@@ -1210,6 +1358,7 @@
     if (ver) ver.textContent = "v" + APP_VERSION;
     state.sheetId = localStorage.getItem("sheetId33") || CONFIG_SHEET || "";
     wire();
+    applySettings(); // populate form labels with defaults until settings load
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});
     }

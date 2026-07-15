@@ -58,6 +58,7 @@
       <span id="count-line"></span>
       <span class="statusbar-actions">
         <span id="app-version" class="app-version" title="App version"></span>
+        <button id="admin-btn" class="linklike" title="Admin settings">Settings</button>
         <button id="sheet-btn" class="linklike" title="Choose which Google Sheet this app uses">Sheet</button>
         <button id="fill-genres-btn" class="linklike" title="Fill blank genres from the built-in list">Fill genres</button>
         <button id="signout-btn" class="linklike">Sign out</button>
@@ -78,39 +79,39 @@
 
     <form id="add-form" class="form" novalidate>
       <div class="grid2">
-        <label>Artist *<input name="artist" required autocomplete="off" /></label>
-        <label>Title <span class="req-record">*</span><input name="title" autocomplete="off" /></label>
+        <label><span data-fl="artist"></span><span data-req="artist" class="req-star"> *</span><input name="artist" required autocomplete="off" /></label>
+        <label><span data-fl="title"></span><span data-req="title" class="req-star req-record"> *</span><input name="title" autocomplete="off" /></label>
       </div>
       <div class="grid2 record-only">
-        <label>Format *
+        <label><span data-fl="format"></span><span data-req="format" class="req-star"> *</span>
           <select name="format">
             <option>LP</option><option>2xLP</option><option>EP</option>
             <option>7"</option><option>10"</option><option>Box set</option>
           </select>
         </label>
-        <label>Condition *
+        <label><span data-fl="condition"></span><span data-req="condition" class="req-star"> *</span>
           <select name="condition"><option>Used</option><option>New</option></select>
         </label>
       </div>
-      <label>Genre<input name="genre" autocomplete="off" list="genre-list" /></label>
+      <label><span data-fl="genre"></span><span data-req="genre" class="req-star"> *</span><input name="genre" autocomplete="off" list="genre-list" /></label>
       <datalist id="genre-list"></datalist>
       <div class="record-only">
-        <label>Where bought *<input name="location" placeholder="Shop or venue" autocomplete="off" /></label>
+        <label><span data-fl="location"></span><span data-req="location" class="req-star"> *</span><input name="location" placeholder="Shop or venue" autocomplete="off" /></label>
         <div class="grid2">
-          <label>City<input name="city" autocomplete="off" /></label>
-          <label>Country<input name="country" list="country-list" autocomplete="off" /></label>
+          <label><span data-fl="city"></span><span data-req="city" class="req-star"> *</span><input name="city" autocomplete="off" /></label>
+          <label><span data-fl="country"></span><span data-req="country" class="req-star"> *</span><input name="country" list="country-list" autocomplete="off" /></label>
         </div>
         <datalist id="country-list"></datalist>
         <div class="grid2">
-          <label>Price *<input name="price" inputmode="decimal" autocomplete="off" /></label>
-          <label>Currency *<input name="currency" value="EUR" autocomplete="off" /></label>
+          <label><span data-fl="price"></span><span data-req="price" class="req-star"> *</span><input name="price" inputmode="decimal" autocomplete="off" /></label>
+          <label><span data-fl="currency"></span><span data-req="currency" class="req-star"> *</span><input name="currency" value="EUR" autocomplete="off" /></label>
         </div>
         <div class="grid2">
-          <label>Year Bought<input name="year" inputmode="numeric" autocomplete="off" /></label>
-          <label>Date bought *<input name="date" type="date" /></label>
+          <label><span data-fl="year"></span><span data-req="year" class="req-star"> *</span><input name="year" inputmode="numeric" autocomplete="off" /></label>
+          <label><span data-fl="date"></span><span data-req="date" class="req-star"> *</span><input name="date" type="date" /></label>
         </div>
       </div>
-      <label>Notes<textarea name="notes" rows="2" placeholder="e.g. brought over by a friend"></textarea></label>
+      <label><span data-fl="notes"></span><span data-req="notes" class="req-star"> *</span><textarea name="notes" rows="2" placeholder="e.g. brought over by a friend"></textarea></label>
       <div class="form-actions">
         <button type="button" id="cancel-add" class="btn">Cancel</button>
         <button type="button" id="delete-record" class="btn btn-danger hidden">Delete</button>
@@ -147,6 +148,25 @@
       <button type="button" id="detail-close" class="btn">Close</button>
       <button type="button" id="detail-delete" class="btn btn-danger">Delete</button>
       <button type="button" id="detail-edit" class="btn btn-primary">Edit</button>
+    </div>
+  </section>
+
+  <!-- ===================== Admin settings ===================== -->
+  <section id="admin-modal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="admin-title">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <h2 id="admin-title" class="sheet-title">Settings</h2>
+    <p class="sheet-help">Rename fields, choose which are required, and set display formats.
+      Saved to a hidden tab in your sheet, so they apply on every device.</p>
+    <div class="admin-head"><span>Field label</span><span>Required</span></div>
+    <div id="admin-fields" class="admin-fields"></div>
+    <div class="grid2">
+      <label>Date format<select id="admin-dateformat"></select></label>
+      <label>Default currency<input id="admin-currency" autocomplete="off" /></label>
+    </div>
+    <div class="form-actions">
+      <button type="button" id="admin-reset" class="btn">Reset</button>
+      <button type="button" id="admin-close" class="btn">Close</button>
+      <button type="button" id="admin-save" class="btn btn-primary">Save</button>
     </div>
   </section>
 
