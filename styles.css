@@ -159,6 +159,12 @@ button { font-family: inherit; }
 }
 .admin-req { display: flex; align-items: center; justify-content: center; width: 64px; }
 .admin-req input { width: 18px; height: 18px; accent-color: var(--gold); }
+.admin-subhead { font-size: 14px; color: var(--sleeve); margin: 16px 0 8px; font-weight: 600; }
+#admin-modal input:not([type="checkbox"]), #admin-modal select, #admin-modal textarea {
+  background: var(--crate-2); border: 1px solid var(--line); color: var(--sleeve);
+  border-radius: 8px; padding: 8px 10px; font-size: 14px; width: 100%;
+}
+#admin-modal textarea { font-family: var(--font-ui); resize: vertical; }
 .wish-actions { display: flex; flex-direction: column; gap: 6px; }
 .chip-btn {
   border: 1px solid var(--line); background: transparent; color: var(--sleeve-dim);

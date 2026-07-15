@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "16";
+  const APP_VERSION = "17";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -96,12 +96,14 @@
   const defaultSettings = () => ({
     labels: Object.fromEntries(FIELD_DEFS.map((f) => [f.key, f.label])),
     required: Object.fromEntries(FIELD_DEFS.map((f) => [f.key, f.req])),
+    lists: { format: FORMAT_VALUES.slice(), condition: CONDITION_VALUES.slice(), genre: GENRE_VALUES.slice() },
     dateFormat: "yyyy-mm-dd",
     currency: "EUR",
   });
   let SETTINGS = defaultSettings();
   const labelOf = (key) => (SETTINGS.labels && SETTINGS.labels[key]) || key;
   const requiredOf = (key) => !!(SETTINGS.required && SETTINGS.required[key]);
+  const listOf = (key) => (SETTINGS.lists && SETTINGS.lists[key]) || [];
 
   // ---------- state ----------
   const state = {
@@ -319,10 +321,10 @@
         },
       });
     };
-    rule("Condition", CONDITION_VALUES);
+    rule("Condition", listOf("condition"));
     rule("Rating", RATING_VALUES);
-    rule("Format", FORMAT_VALUES);
-    rule("Genre", GENRE_VALUES);
+    rule("Format", listOf("format"));
+    rule("Genre", listOf("genre"));
     rule("Country", COUNTRY_VALUES);
 
     // 3. Fix number/date formats on the columns the app writes.
@@ -403,9 +405,15 @@
       const raw = resp.values && resp.values[0] && resp.values[0][0];
       if (raw) {
         const p = JSON.parse(raw);
+        const pl = p.lists || {};
         SETTINGS = {
           labels: { ...SETTINGS.labels, ...(p.labels || {}) },
           required: { ...SETTINGS.required, ...(p.required || {}) },
+          lists: {
+            format: Array.isArray(pl.format) && pl.format.length ? pl.format : SETTINGS.lists.format,
+            condition: Array.isArray(pl.condition) && pl.condition.length ? pl.condition : SETTINGS.lists.condition,
+            genre: Array.isArray(pl.genre) && pl.genre.length ? pl.genre : SETTINGS.lists.genre,
+          },
           dateFormat: p.dateFormat || SETTINGS.dateFormat,
           currency: p.currency || SETTINGS.currency,
         };
@@ -428,7 +436,13 @@
     });
   }
 
-  // Push current settings into the form labels / required markers / defaults.
+  // Push current settings into the form labels / required markers / dropdowns.
+  function setSelectOptions(sel, values) {
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = values.map((v) => `<option>${esc(v)}</option>`).join("");
+    if (values.includes(cur)) sel.value = cur;
+  }
   function applySettings() {
     FIELD_DEFS.forEach((fd) => {
       const lbl = document.querySelector(`[data-fl="${fd.key}"]`);
@@ -436,6 +450,11 @@
       const req = document.querySelector(`[data-req="${fd.key}"]`);
       if (req) req.classList.toggle("hidden", !requiredOf(fd.key));
     });
+    const form = $("#add-form");
+    if (form) {
+      setSelectOptions(form.format, listOf("format"));
+      setSelectOptions(form.condition, listOf("condition"));
+    }
   }
 
   // First required field (record mode) left empty → its label, else null.
@@ -641,6 +660,9 @@
     $("#admin-dateformat").innerHTML = DATE_FORMATS
       .map((f) => `<option ${f === s.dateFormat ? "selected" : ""}>${f}</option>`).join("");
     $("#admin-currency").value = s.currency;
+    $("#admin-list-format").value = (s.lists.format || []).join("\n");
+    $("#admin-list-condition").value = (s.lists.condition || []).join("\n");
+    $("#admin-list-genre").value = (s.lists.genre || []).join("\n");
   }
 
   function openAdmin() {
@@ -656,20 +678,31 @@
 
   async function saveAdmin() {
     const prevDateFormat = SETTINGS.dateFormat;
+    const prevLists = JSON.stringify(SETTINGS.lists);
     FIELD_DEFS.forEach((fd) => {
       const lin = document.querySelector(`.admin-label[data-akey="${fd.key}"]`);
       const cb = document.querySelector(`[data-areq="${fd.key}"]`);
       if (lin) SETTINGS.labels[fd.key] = lin.value.trim() || fd.label;
       if (cb) SETTINGS.required[fd.key] = cb.checked;
     });
+    const parseList = (sel, fallback) => {
+      const arr = [...new Set($(sel).value.split("\n").map((x) => x.trim()).filter(Boolean))];
+      return arr.length ? arr : fallback;
+    };
+    SETTINGS.lists = {
+      format: parseList("#admin-list-format", SETTINGS.lists.format),
+      condition: parseList("#admin-list-condition", SETTINGS.lists.condition),
+      genre: parseList("#admin-list-genre", SETTINGS.lists.genre),
+    };
     SETTINGS.dateFormat = $("#admin-dateformat").value || "yyyy-mm-dd";
     SETTINGS.currency = $("#admin-currency").value.trim() || "EUR";
     applySettings();
     setBusy(true);
     try {
       await saveSettings();
-      if (SETTINGS.dateFormat !== prevDateFormat) {
-        await fixValidation().catch(() => {}); // re-apply the new date format to the sheet
+      // Re-apply the sheet's dropdowns/date format if lists or format changed.
+      if (SETTINGS.dateFormat !== prevDateFormat || JSON.stringify(SETTINGS.lists) !== prevLists) {
+        await fixValidation().catch(() => {});
       }
       toast("Settings saved ✓");
       closeAdmin();
@@ -1156,8 +1189,8 @@
     if (state.editWishRow) $("#save-add").textContent = "Update wish";
     // Delete only makes sense when editing an existing record.
     $("#delete-record").classList.toggle("hidden", !state.editRow);
-    // genre suggestions: the curated list plus any genres already in the sheet
-    const genres = [...new Set([...GENRE_VALUES, ...state.collection.map((i) => i.genre)].filter(Boolean))].sort();
+    // genre suggestions: the configured list plus any genres already in the sheet
+    const genres = [...new Set([...listOf("genre"), ...state.collection.map((i) => i.genre)].filter(Boolean))].sort();
     $("#genre-list").innerHTML = genres.map((g) => `<option value="${esc(g)}">`).join("");
     // country suggestions: the country list plus any already in the sheet
     const countries = [...new Set([...COUNTRY_VALUES, ...state.collection.map((i) => i.country)].filter(Boolean))].sort();
