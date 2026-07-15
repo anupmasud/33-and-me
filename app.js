@@ -10,7 +10,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "10";
+  const APP_VERSION = "11";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -485,6 +485,31 @@
     } finally { setBusy(false); }
   }
 
+  async function deleteRecord(item) {
+    if (!confirm(`Delete "${item.title || item.artist}"? This removes the row from your sheet.`)) return;
+    setBusy(true);
+    try {
+      await api(":batchUpdate", {
+        method: "POST",
+        body: JSON.stringify({
+          requests: [{
+            deleteDimension: {
+              range: {
+                sheetId: state.collectionSheet.sheetId, dimension: "ROWS",
+                startIndex: item.row - 1, endIndex: item.row,
+              },
+            },
+          }],
+        }),
+      });
+      await loadData();
+      toast("Record deleted");
+      render();
+    } catch (e) {
+      toast("Couldn't delete — are you online?");
+    } finally { setBusy(false); }
+  }
+
   async function addWish(f) {
     setBusy(true);
     try {
@@ -535,6 +560,7 @@
   }
 
   async function removeWish(item) {
+    if (!confirm(`Remove "${item.title || item.artist || "this wish"}" from your wishlist?`)) return;
     setBusy(true);
     try {
       await deleteWishRow(item.row);
@@ -827,6 +853,7 @@
             <button class="listen-btn" data-listen="${idx}">♪ Listened</button>
             <div class="listen-meta">${i.listens ? `${i.listens}× · ${esc(i.lastListened || "")}` : "never played"}</div>
             <button class="chip-btn" data-edit="${idx}">Edit</button>
+            <button class="chip-btn danger" data-del="${idx}">Delete</button>
           </div>
         </div>`);
       });
@@ -1043,6 +1070,7 @@
       if (!btn) return;
       if (btn.dataset.listen !== undefined) markListened(render._colHits[+btn.dataset.listen]);
       else if (btn.dataset.edit !== undefined) openEdit(render._colHits[+btn.dataset.edit]);
+      else if (btn.dataset.del !== undefined) deleteRecord(render._colHits[+btn.dataset.del]);
       else if (btn.dataset.got !== undefined) {
         const w = render._wishHits[+btn.dataset.got];
         state.pendingWishRow = w.row;
