@@ -5,7 +5,7 @@
    3) COLLECTION_SHEET: leave "" to use the first tab automatically,
       or set the exact tab name.                              */
 window.CONFIG = {
-  CLIENT_ID: "PASTE-YOUR-CLIENT-ID.apps.googleusercontent.com",
+  CLIENT_ID: "439826223009-h37rll8c851ic75hm6kqh0dsbcvome56.apps.googleusercontent.com",
   SPREADSHEET_ID: "132m5Ok9N7g3G1TRN40B4DKDezjv4NWc2a0N1gn_0gdQ",
   COLLECTION_SHEET: "",
   WISHLIST_SHEET: "Wishlist",
