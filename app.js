@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "12";
+  const APP_VERSION = "13";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -88,6 +88,7 @@
     pendingWishRow: null,   // wish row to delete after "Got it" save
     editRow: null,          // collection row being edited (null = adding)
     editWishRow: null,      // wishlist row being edited (null = adding)
+    detailItem: null,       // record shown in the detail view
     busy: 0,
   };
 
@@ -463,6 +464,39 @@
     } catch (e) {
       toast("Couldn't load that record to edit — are you online?");
     } finally { setBusy(false); }
+  }
+
+  // Friendlier labels for a few columns in the read-only detail view.
+  const DETAIL_LABELS = { "Year": "Year Bought", "Date": "Date bought", "Album Name": "Title" };
+
+  async function openDetail(item) {
+    const t = state.collectionSheet.title;
+    setBusy(true);
+    try {
+      const resp = await api("/values/" + q(`${t}!${item.row}:${item.row}`)); // formatted values
+      const vals = (resp.values && resp.values[0]) || [];
+      $("#detail-title").textContent = item.title || "(untitled)";
+      $("#detail-artist").textContent = item.artist || "";
+      const rows = [];
+      state.headers.forEach((h, i) => {
+        if (h === "Artist" || h === "Album Name" || h === "Title") return; // shown in the header
+        const v = (vals[i] == null ? "" : String(vals[i])).trim();
+        if (!v) return;
+        rows.push(`<dt>${esc(DETAIL_LABELS[h] || h)}</dt><dd>${esc(v)}</dd>`);
+      });
+      $("#detail-list").innerHTML = rows.join("") || `<dd class="detail-empty">No other details recorded.</dd>`;
+      state.detailItem = item;
+      $("#detail-modal").classList.remove("hidden");
+      $("#sheet-backdrop").classList.remove("hidden");
+    } catch (e) {
+      toast("Couldn't load details — are you online?");
+    } finally { setBusy(false); }
+  }
+
+  function closeDetail() {
+    $("#detail-modal").classList.add("hidden");
+    $("#sheet-backdrop").classList.add("hidden");
+    state.detailItem = null;
   }
 
   async function updateRecord(row, f) {
@@ -862,6 +896,7 @@
           <div class="rec-actions">
             <button class="listen-btn" data-listen="${idx}">♪ Listened</button>
             <div class="listen-meta">${i.listens ? `${i.listens}× · ${esc(i.lastListened || "")}` : "never played"}</div>
+            <button class="chip-btn" data-view="${idx}">Details</button>
             <button class="chip-btn" data-edit="${idx}">Edit</button>
             <button class="chip-btn danger" data-del="${idx}">Delete</button>
           </div>
@@ -1073,8 +1108,15 @@
         render();
       }));
     $("#add-btn").addEventListener("click", () => openSheet("record"));
+    $("#detail-close").addEventListener("click", closeDetail);
+    $("#detail-edit").addEventListener("click", () => {
+      const it = state.detailItem;
+      closeDetail();
+      if (it) openEdit(it);
+    });
     $("#sheet-backdrop").addEventListener("click", () => {
       closeSheet();
+      closeDetail();
       if (state.sheetId) closeSheetModal(); // don't let them dismiss the mandatory first-run picker
     });
     $("#cancel-add").addEventListener("click", closeSheet);
@@ -1125,6 +1167,7 @@
       const btn = ev.target.closest("button");
       if (!btn) return;
       if (btn.dataset.listen !== undefined) markListened(render._colHits[+btn.dataset.listen]);
+      else if (btn.dataset.view !== undefined) openDetail(render._colHits[+btn.dataset.view]);
       else if (btn.dataset.edit !== undefined) openEdit(render._colHits[+btn.dataset.edit]);
       else if (btn.dataset.del !== undefined) deleteRecord(render._colHits[+btn.dataset.del]);
       else if (btn.dataset.got !== undefined) {

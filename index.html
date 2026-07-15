@@ -92,10 +92,7 @@
           <select name="condition"><option>Used</option><option>New</option></select>
         </label>
       </div>
-      <div class="grid2">
-        <label>Genre<input name="genre" autocomplete="off" list="genre-list" /></label>
-        <label class="record-only">Year<input name="year" inputmode="numeric" autocomplete="off" /></label>
-      </div>
+      <label>Genre<input name="genre" autocomplete="off" list="genre-list" /></label>
       <datalist id="genre-list"></datalist>
       <div class="record-only">
         <label>Where bought *<input name="location" placeholder="Shop or venue" autocomplete="off" /></label>
@@ -104,10 +101,13 @@
           <label>Country<input name="country" list="country-list" autocomplete="off" /></label>
         </div>
         <datalist id="country-list"></datalist>
-        <div class="grid3">
+        <div class="grid2">
           <label>Price *<input name="price" inputmode="decimal" autocomplete="off" /></label>
           <label>Currency *<input name="currency" value="EUR" autocomplete="off" /></label>
-          <label>Date *<input name="date" type="date" /></label>
+        </div>
+        <div class="grid2">
+          <label>Year Bought<input name="year" inputmode="numeric" autocomplete="off" /></label>
+          <label>Date bought *<input name="date" type="date" /></label>
         </div>
       </div>
       <label>Notes<textarea name="notes" rows="2" placeholder="e.g. brought over by a friend"></textarea></label>
@@ -134,6 +134,18 @@
         <button type="submit" class="btn btn-primary">Use this sheet</button>
       </div>
     </form>
+  </section>
+
+  <!-- ===================== Record detail ===================== -->
+  <section id="detail-modal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <h2 id="detail-title" class="sheet-title"></h2>
+    <div id="detail-artist" class="card-artist"></div>
+    <dl id="detail-list" class="detail-list"></dl>
+    <div class="form-actions">
+      <button type="button" id="detail-close" class="btn">Close</button>
+      <button type="button" id="detail-edit" class="btn btn-primary">Edit</button>
+    </div>
   </section>
 
   <div id="toast" class="toast hidden" role="status"></div>

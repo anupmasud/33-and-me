@@ -136,6 +136,10 @@ button { font-family: inherit; }
 .app-version { font-size: 11px; color: var(--sleeve-dim); opacity: 0.7; }
 .sheet-title { font-family: var(--font-display); font-size: 20px; color: var(--sleeve); margin: 4px 0 6px; }
 .sheet-help { color: var(--sleeve-dim); font-size: 13px; margin-bottom: 14px; }
+.detail-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 14px 0 18px; }
+.detail-list dt { color: var(--sleeve-dim); font-size: 13px; }
+.detail-list dd { color: var(--sleeve); font-size: 14px; margin: 0; word-break: break-word; }
+.detail-empty { color: var(--sleeve-dim); font-style: italic; }
 .wish-actions { display: flex; flex-direction: column; gap: 6px; }
 .chip-btn {
   border: 1px solid var(--line); background: transparent; color: var(--sleeve-dim);
