@@ -25,6 +25,7 @@
     scope: "all",
     addMode: "record",
     pendingWishRow: null,   // wish row to delete after "Got it" save
+    editRow: null,          // collection row being edited (null = adding)
     busy: 0,
   };
 
@@ -275,6 +276,79 @@
     } finally { setBusy(false); }
   }
 
+  // Coerce whatever the Date cell holds into an <input type="date"> value.
+  // Sheets returns real dates as serial numbers under UNFORMATTED_VALUE.
+  function toISODate(v) {
+    if (v === "" || v == null) return "";
+    if (typeof v === "number") {
+      const d = new Date(Math.round((v - 25569) * 86400000)); // 25569 = 1899-12-30 → 1970-01-01
+      return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+    }
+    const s = String(v);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  }
+
+  // Load the full row (unformatted, so numbers/dates come back raw) and open
+  // the form pre-filled for editing.
+  async function openEdit(item) {
+    const t = state.collectionSheet.title;
+    setBusy(true);
+    try {
+      const resp = await api(
+        "/values/" + q(`${t}!${item.row}:${item.row}`) + "?valueRenderOption=UNFORMATTED_VALUE"
+      );
+      const vals = (resp.values && resp.values[0]) || [];
+      const g = (name) => { const i = state.col[name]; return i === undefined ? "" : (vals[i] == null ? "" : vals[i]); };
+      openSheet("record", {
+        artist: g("Artist"),
+        title: g("Album Name") || g("Title"),
+        genre: g("Genre"),
+        location: g("Location"),
+        year: g("Year") === "" ? "" : String(g("Year")),
+        format: g("Format"),
+        condition: g("Condition"),
+        price: g("Original Cost") === "" ? "" : String(g("Original Cost")),
+        currency: g("Original Currency"),
+        date: toISODate(g("Date")),
+        notes: g("Notes"),
+      }, item.row);
+    } catch (e) {
+      toast("Couldn't load that record to edit — are you online?");
+    } finally { setBusy(false); }
+  }
+
+  async function updateRecord(row, f) {
+    const t = state.collectionSheet.title;
+    const data = [];
+    const set = (name, val) => {
+      const idx = state.col[name];
+      if (idx === undefined) return;
+      data.push({ range: `${t}!${colLetter(idx)}${row}`, values: [[val]] });
+    };
+    set("Artist", f.artist);
+    set("Album Name", f.title); set("Title", f.title); // whichever column the sheet uses
+    set("Genre", f.genre); set("Location", f.location); set("Year", f.year);
+    set("Date", f.date); set("Original Cost", f.price); set("Original Currency", f.currency);
+    if (norm(f.currency) === "usd") set("Cost (USD)", f.price);
+    set("Format", f.format); set("Condition", f.condition); set("Notes", f.notes);
+    // Listen Count / Last Listened / SN are intentionally left untouched.
+
+    setBusy(true);
+    try {
+      await api("/values:batchUpdate", {
+        method: "POST",
+        body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+      });
+      await loadData();
+      toast(`Updated "${f.title}" ✓`);
+      closeSheet(); render();
+    } catch (e) {
+      toast("Couldn't save — are you online?");
+    } finally { setBusy(false); }
+  }
+
   async function addWish(f) {
     setBusy(true);
     try {
@@ -349,9 +423,10 @@
             <div class="card-meta">${esc([i.genre, i.format, i.year, i.location].filter(Boolean).join(" · "))}</div>
             ${i.notes ? `<div class="card-notes">${esc(i.notes)}</div>` : ""}
           </div>
-          <div>
+          <div class="rec-actions">
             <button class="listen-btn" data-listen="${idx}">♪ Listened</button>
             <div class="listen-meta">${i.listens ? `${i.listens}× · ${esc(i.lastListened || "")}` : "never played"}</div>
+            <button class="chip-btn" data-edit="${idx}">Edit</button>
           </div>
         </div>`);
       });
@@ -391,10 +466,13 @@
   }
 
   // ---------- add sheet UI ----------
-  function openSheet(mode, prefill) {
+  function openSheet(mode, prefill, editRow) {
+    state.editRow = editRow || null;
     state.addMode = mode || "record";
     $("#add-sheet").classList.remove("hidden");
     $("#sheet-backdrop").classList.remove("hidden");
+    // Editing is always a record — hide the record/wish toggle in that case.
+    $(".sheet-segments").classList.toggle("hidden", !!state.editRow);
     document.querySelectorAll("[data-addmode]").forEach((b) =>
       b.classList.toggle("active", b.dataset.addmode === state.addMode));
     applyAddMode();
@@ -405,7 +483,17 @@
       form.artist.value = prefill.artist || "";
       form.title.value = prefill.title || "";
       form.genre.value = prefill.genre || "";
+      // extended fields (used when editing an existing record)
+      if (prefill.year !== undefined) form.year.value = prefill.year || "";
+      if (prefill.format) form.format.value = prefill.format;
+      if (prefill.condition) form.condition.value = prefill.condition;
+      if (prefill.location !== undefined) form.location.value = prefill.location || "";
+      if (prefill.price !== undefined) form.price.value = prefill.price || "";
+      if (prefill.currency) form.currency.value = prefill.currency;
+      if (prefill.date) form.date.value = prefill.date;
+      if (prefill.notes !== undefined) form.notes.value = prefill.notes || "";
     }
+    if (state.editRow) $("#save-add").textContent = "Update record";
     // genre suggestions from existing data
     const genres = [...new Set(state.collection.map((i) => i.genre).filter(Boolean))].sort();
     $("#genre-list").innerHTML = genres.map((g) => `<option value="${esc(g)}">`).join("");
@@ -424,12 +512,14 @@
     $("#add-sheet").classList.add("hidden");
     $("#sheet-backdrop").classList.add("hidden");
     state.pendingWishRow = null;
+    state.editRow = null;
   }
 
   function checkDup() {
     const f = $("#add-form");
     const a = norm(f.artist.value), t = norm(f.title.value);
     const warn = $("#dup-warning");
+    if (state.editRow) { warn.classList.add("hidden"); return; }
     if (!a && !t) { warn.classList.add("hidden"); return; }
     const dup = state.collection.find((i) =>
       (a && norm(i.artist).includes(a) || !a) &&
@@ -514,7 +604,12 @@
         currency: f.currency.value.trim(), date: f.date.value,
         notes: f.notes.value.trim(),
       };
-      if (state.addMode === "record") {
+      if (state.editRow) {
+        if (!data.artist || !data.title) return toast("Artist and title are required");
+        if (!data.location || !data.price || !data.currency || !data.date)
+          return toast("Purchase info is required (where, price, currency, date)");
+        updateRecord(state.editRow, data);
+      } else if (state.addMode === "record") {
         if (!data.artist || !data.title) return toast("Artist and title are required");
         if (!data.location || !data.price || !data.currency || !data.date)
           return toast("Purchase info is required (where, price, currency, date)");
@@ -531,6 +626,7 @@
       const btn = ev.target.closest("button");
       if (!btn) return;
       if (btn.dataset.listen !== undefined) markListened(render._colHits[+btn.dataset.listen]);
+      else if (btn.dataset.edit !== undefined) openEdit(render._colHits[+btn.dataset.edit]);
       else if (btn.dataset.got !== undefined) {
         const w = render._wishHits[+btn.dataset.got];
         state.pendingWishRow = w.row;
