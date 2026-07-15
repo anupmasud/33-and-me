@@ -188,23 +188,24 @@
     state.headers = headers;
     state.col = {};
     headers.forEach((h, i) => { state.col[h] = i; });
+  }
 
-    // Correct the Condition/Rating/Format/Genre dropdowns (once per device per
-    // version). Never block loading over it, but surface the result visibly.
+  // Runs once per device per version, in the background (does not block showing
+  // your records). Surfaces the result to the console and a toast.
+  async function maybeFixValidation() {
+    const flag = "valfix33:" + C.SPREADSHEET_ID + ":" + VALIDATION_VERSION;
+    if (localStorage.getItem(flag)) {
+      console.log("33&Me: dropdown validation already applied on this device");
+      return;
+    }
     try {
-      const flag = "valfix33:" + C.SPREADSHEET_ID + ":" + VALIDATION_VERSION;
-      if (!localStorage.getItem(flag)) {
-        const applied = await fixValidation();
-        if (applied) {
-          localStorage.setItem(flag, "1");
-          console.log("33&Me: dropdown validation applied ✓");
-          toast("Sheet dropdowns updated ✓");
-        } else {
-          console.warn("33&Me: dropdown validation SKIPPED — none of Condition/Rating/Format/Genre matched. Your header row is:", state.headers);
-          toast("Dropdown fix skipped: column names didn't match (see console)", 6000);
-        }
+      const applied = await fixValidation();
+      if (applied) {
+        localStorage.setItem(flag, "1");
+        console.log("33&Me: dropdown validation applied ✓");
+        toast("Sheet dropdowns updated ✓");
       } else {
-        console.log("33&Me: dropdown validation already applied on this device (flag", flag + ")");
+        console.warn("33&Me: dropdown validation SKIPPED — no target columns found. Header row:", state.headers);
       }
     } catch (e) {
       console.error("33&Me: dropdown validation FAILED:", e);
@@ -653,6 +654,7 @@
       await loadData();
       $("#offline-badge").classList.add("hidden");
       render();
+      maybeFixValidation(); // background; never blocks showing records
     } catch (e) {
       if (hadCache) {
         $("#offline-badge").classList.remove("hidden");

@@ -2,7 +2,7 @@
    (and search over the last sync works) inside a record store
    with no signal. API calls are never cached here; data caching
    is handled in localStorage by app.js. */
-const CACHE = "me33-shell-v5";
+const CACHE = "me33-shell-v6";
 const SHELL = [
   ".", "index.html", "styles.css", "app.js", "config.js",
   "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png",
@@ -24,14 +24,20 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   // never intercept Google APIs / auth
   if (url.origin !== location.origin) return;
-  // network-first so updates land, cache fallback for offline
+  if (e.request.method !== "GET") return;
+  // Stale-while-revalidate: serve cache instantly (fast paint), refresh in the
+  // background so the next load has the newest files. A version bump to CACHE
+  // still force-purges everything via the activate handler.
   e.respondWith(
-    fetch(e.request)
-      .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy));
-        return res;
-      })
-      .catch(() => caches.match(e.request).then((m) => m || caches.match("index.html")))
+    caches.match(e.request).then((cached) => {
+      const fromNetwork = fetch(e.request)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy));
+          return res;
+        })
+        .catch(() => cached || caches.match("index.html"));
+      return cached || fromNetwork;
+    })
   );
 });
