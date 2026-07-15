@@ -30,7 +30,7 @@
     "Soundtrack", "Spanish", "Spoken Word", "Synth-Pop", "Techno", "Traditional",
     "West African", "Western Classical", "Western Soundtrack", "World",
   ];
-  const VALIDATION_VERSION = "v4";
+  const VALIDATION_VERSION = "v5";
 
   // ---------- state ----------
   const state = {
@@ -212,22 +212,33 @@
     }
   }
 
-  // Replace whatever data-validation the Condition/Rating columns had (they were
-  // set to Yes/No) with the app's real allowed values.
+  // The duplicated sheet had stray "Yes/No" dropdowns across many columns and
+  // wrong number formats. Nuke ALL validation on the data rows, then re-apply
+  // only the dropdowns we want and set proper number/date formats.
   async function fixValidation() {
     const sid = state.collectionSheet.sheetId;
+    const nCols = state.headers.length;
+    if (!nCols) return false;
+    const dataRows = { sheetId: sid, startRowIndex: 1 }; // row 2 → end
     const requests = [];
+
+    // 1. Clear every data-validation rule across all data columns.
+    requests.push({
+      setDataValidation: { range: { ...dataRows, startColumnIndex: 0, endColumnIndex: nCols } },
+      // no `rule` => clears validation in the range
+    });
+
+    // 2. Re-apply the dropdowns that should exist.
     const rule = (colName, values) => {
       const idx = state.col[colName];
       if (idx === undefined) return;
       requests.push({
         setDataValidation: {
-          // startRowIndex 1 skips the header; omitting endRowIndex covers the column.
-          range: { sheetId: sid, startRowIndex: 1, startColumnIndex: idx, endColumnIndex: idx + 1 },
+          range: { ...dataRows, startColumnIndex: idx, endColumnIndex: idx + 1 },
           rule: {
             condition: { type: "ONE_OF_LIST", values: values.map((v) => ({ userEnteredValue: v })) },
             showCustomUi: true,
-            strict: false, // don't reject existing Yes/No cells, just offer the right list
+            strict: false, // offer the list but don't reject existing odd values
           },
         },
       });
@@ -236,7 +247,23 @@
     rule("Rating", RATING_VALUES);
     rule("Format", FORMAT_VALUES);
     rule("Genre", GENRE_VALUES);
-    if (!requests.length) return false;
+
+    // 3. Fix number/date formats on the columns the app writes.
+    const fmt = (colName, numberFormat) => {
+      const idx = state.col[colName];
+      if (idx === undefined) return;
+      requests.push({
+        repeatCell: {
+          range: { ...dataRows, startColumnIndex: idx, endColumnIndex: idx + 1 },
+          cell: { userEnteredFormat: { numberFormat } },
+          fields: "userEnteredFormat.numberFormat",
+        },
+      });
+    };
+    fmt("Listen Count", { type: "NUMBER", pattern: "0" });
+    fmt("Last Listened", { type: "DATE", pattern: "yyyy-mm-dd" });
+    fmt("Date", { type: "DATE", pattern: "yyyy-mm-dd" });
+
     await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests }) });
     return true;
   }
