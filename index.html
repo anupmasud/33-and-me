@@ -58,6 +58,7 @@
       <span id="count-line"></span>
       <span class="statusbar-actions">
         <span id="app-version" class="app-version" title="App version"></span>
+        <button id="sheet-btn" class="linklike" title="Choose which Google Sheet this app uses">Sheet</button>
         <button id="fill-genres-btn" class="linklike" title="Fill blank genres from the built-in list">Fill genres</button>
         <button id="signout-btn" class="linklike">Sign out</button>
       </span>
@@ -113,6 +114,24 @@
       <div class="form-actions">
         <button type="button" id="cancel-add" class="btn">Cancel</button>
         <button type="submit" id="save-add" class="btn btn-primary">Save record</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ===================== Sheet picker ===================== -->
+  <section id="sheet-modal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="sheet-modal-title">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <h2 id="sheet-modal-title" class="sheet-title">Your Google Sheet</h2>
+    <p class="sheet-help">Paste the link (or ID) of the Google Sheet this app should read and write.
+      Make sure you're signed in as an account that can open it.</p>
+    <form id="sheet-form" class="form" novalidate>
+      <label>Sheet URL or ID
+        <input name="sheeturl" autocomplete="off" placeholder="https://docs.google.com/spreadsheets/d/…" />
+      </label>
+      <p id="sheet-error" class="dup hidden"></p>
+      <div class="form-actions">
+        <button type="button" id="sheet-cancel" class="btn">Cancel</button>
+        <button type="submit" class="btn btn-primary">Use this sheet</button>
       </div>
     </form>
   </section>

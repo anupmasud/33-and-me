@@ -134,6 +134,8 @@ button { font-family: inherit; }
 .rec-actions .chip-btn { text-align: center; }
 .statusbar-actions { display: flex; align-items: center; gap: 16px; }
 .app-version { font-size: 11px; color: var(--sleeve-dim); opacity: 0.7; }
+.sheet-title { font-family: var(--font-display); font-size: 20px; color: var(--sleeve); margin: 4px 0 6px; }
+.sheet-help { color: var(--sleeve-dim); font-size: 13px; margin-bottom: 14px; }
 .wish-actions { display: flex; flex-direction: column; gap: 6px; }
 .chip-btn {
   border: 1px solid var(--line); background: transparent; color: var(--sleeve-dim);

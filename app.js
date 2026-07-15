@@ -6,11 +6,20 @@
   "use strict";
 
   const C = window.CONFIG;
-  const API = "https://sheets.googleapis.com/v4/spreadsheets/" + C.SPREADSHEET_ID;
+  // Each user connects their own Google Sheet at runtime (stored per-browser),
+  // which makes the app reusable. config.js SPREADSHEET_ID is just a default.
+  const CONFIG_SHEET = (C.SPREADSHEET_ID && !C.SPREADSHEET_ID.startsWith("PASTE")) ? C.SPREADSHEET_ID : "";
+  const parseSheetId = (input) => {
+    const s = (input || "").trim();
+    const m = s.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    if (m) return m[1];
+    return /^[a-zA-Z0-9_-]{20,}$/.test(s) ? s : ""; // allow a bare ID too
+  };
+  const sheetUrl = (id) => id ? "https://docs.google.com/spreadsheets/d/" + id : "";
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "11";
+  const APP_VERSION = "12";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -73,6 +82,7 @@
     wishlist: [],           // {row, artist, title, genre, notes}
     collectionSheet: null,  // {title, sheetId}
     wishlistSheet: null,
+    sheetId: "",            // active spreadsheet id (chosen at runtime)
     scope: "all",
     addMode: "record",
     pendingWishRow: null,   // wish row to delete after "Got it" save
@@ -152,7 +162,7 @@
   // ---------- Sheets API ----------
   async function api(path, opts = {}, retry = true) {
     const token = await getToken(false).catch(() => getToken(true));
-    const res = await fetch(API + path, {
+    const res = await fetch("https://sheets.googleapis.com/v4/spreadsheets/" + state.sheetId + path, {
       ...opts,
       headers: {
         "Authorization": "Bearer " + token,
@@ -225,7 +235,7 @@
   // Runs once per device per version, in the background (does not block showing
   // your records). Surfaces the result to the console and a toast.
   async function maybeFixValidation() {
-    const flag = "valfix33:" + C.SPREADSHEET_ID + ":" + VALIDATION_VERSION;
+    const flag = "valfix33:" + state.sheetId + ":" + VALIDATION_VERSION;
     if (localStorage.getItem(flag)) {
       console.log("33&Me: dropdown validation already applied on this device");
       return;
@@ -338,14 +348,14 @@
       artist: r[0] || "", title: r[1] || "", genre: r[2] || "", notes: r[3] || "",
     })).filter((x) => x.artist || x.title || x.genre);
 
-    localStorage.setItem("cache33", JSON.stringify({
+    localStorage.setItem("cache33:" + state.sheetId, JSON.stringify({
       ts: Date.now(), collection: state.collection, wishlist: state.wishlist,
     }));
   }
 
   function loadCache() {
     try {
-      const c = JSON.parse(localStorage.getItem("cache33") || "null");
+      const c = JSON.parse(localStorage.getItem("cache33:" + state.sheetId) || "null");
       if (c) { state.collection = c.collection; state.wishlist = c.wishlist; return true; }
     } catch (_) {}
     return false;
@@ -974,9 +984,38 @@
     $("#app-view").classList.add("hidden");
   }
 
+  // ---------- sheet picker ----------
+  function openSheetModal(firstRun) {
+    const form = $("#sheet-form");
+    $("#sheet-error").classList.add("hidden");
+    form.sheeturl.value = state.sheetId ? sheetUrl(state.sheetId) : "";
+    // On mandatory first run (no sheet yet) there's nothing to cancel back to.
+    $("#sheet-cancel").classList.toggle("hidden", !!firstRun && !state.sheetId);
+    $("#sheet-modal").classList.remove("hidden");
+    $("#sheet-backdrop").classList.remove("hidden");
+    setTimeout(() => form.sheeturl.focus(), 60);
+  }
+
+  function closeSheetModal() {
+    $("#sheet-modal").classList.add("hidden");
+    if ($("#add-sheet").classList.contains("hidden")) $("#sheet-backdrop").classList.add("hidden");
+  }
+
+  function applySheet(id) {
+    if (id === state.sheetId) { closeSheetModal(); return; }
+    state.sheetId = id;
+    localStorage.setItem("sheetId33", id);
+    // reset per-sheet state so the new sheet is set up from scratch
+    state.collectionSheet = null; state.wishlistSheet = null;
+    state.collection = []; state.wishlist = [];
+    closeSheetModal();
+    showApp();
+  }
+
   async function showApp() {
     $("#signin-view").classList.add("hidden");
     $("#app-view").classList.remove("hidden");
+    if (!state.sheetId) { openSheetModal(true); return; } // must pick a sheet first
     const hadCache = loadCache();
     if (hadCache) render();
     setBusy(true);
@@ -1011,7 +1050,21 @@
     });
     $("#signout-btn").addEventListener("click", signOut);
     $("#fill-genres-btn").addEventListener("click", fillGenres);
+    $("#sheet-btn").addEventListener("click", () => openSheetModal(false));
     $("#refresh-btn").addEventListener("click", showApp);
+
+    $("#sheet-cancel").addEventListener("click", closeSheetModal);
+    $("#sheet-form").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const id = parseSheetId(ev.target.sheeturl.value);
+      const err = $("#sheet-error");
+      if (!id) {
+        err.textContent = "That doesn't look like a Google Sheets link or ID.";
+        err.classList.remove("hidden");
+        return;
+      }
+      applySheet(id);
+    });
     $("#search-input").addEventListener("input", render);
     document.querySelectorAll(".segments [data-scope]").forEach((b) =>
       b.addEventListener("click", () => {
@@ -1020,7 +1073,10 @@
         render();
       }));
     $("#add-btn").addEventListener("click", () => openSheet("record"));
-    $("#sheet-backdrop").addEventListener("click", closeSheet);
+    $("#sheet-backdrop").addEventListener("click", () => {
+      closeSheet();
+      if (state.sheetId) closeSheetModal(); // don't let them dismiss the mandatory first-run picker
+    });
     $("#cancel-add").addEventListener("click", closeSheet);
     document.querySelectorAll("[data-addmode]").forEach((b) =>
       b.addEventListener("click", () => {
@@ -1096,6 +1152,7 @@
     console.log("33&Me build loaded — app v" + APP_VERSION + ", validation " + VALIDATION_VERSION);
     const ver = $("#app-version");
     if (ver) ver.textContent = "v" + APP_VERSION;
+    state.sheetId = localStorage.getItem("sheetId33") || CONFIG_SHEET || "";
     wire();
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});

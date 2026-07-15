@@ -1,7 +1,10 @@
 /* ================= 33&Me configuration =================
    1) CLIENT_ID: create a Google OAuth "Web application" client
       (see README.md, step 2) and paste its ID here.
-   2) SPREADSHEET_ID: already set to your collection sheet.
+   2) SPREADSHEET_ID: an OPTIONAL default sheet. Each user can also
+      connect their own sheet at runtime via the footer "Sheet" button
+      (stored in their browser, overrides this default). Leave it ""
+      to make every user pick their own sheet on first run.
    3) COLLECTION_SHEET: leave "" to use the first tab automatically,
       or set the exact tab name.                              */
 window.CONFIG = {
