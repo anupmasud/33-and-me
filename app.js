@@ -73,6 +73,7 @@
     addMode: "record",
     pendingWishRow: null,   // wish row to delete after "Got it" save
     editRow: null,          // collection row being edited (null = adding)
+    editWishRow: null,      // wishlist row being edited (null = adding)
     busy: 0,
   };
 
@@ -495,6 +496,24 @@
     } finally { setBusy(false); }
   }
 
+  // Wishlist columns are fixed: A=Artist B=Title C=Genre D=Notes E=Added.
+  // Write A–D and leave the "Added" date untouched.
+  async function updateWish(row, f) {
+    const t = state.wishlistSheet.title;
+    setBusy(true);
+    try {
+      await api("/values/" + q(`${t}!A${row}:D${row}`) + "?valueInputOption=USER_ENTERED", {
+        method: "PUT",
+        body: JSON.stringify({ values: [[f.artist, f.title, f.genre, f.notes]] }),
+      });
+      await loadData();
+      toast("Wish updated ✓");
+      closeSheet(); render();
+    } catch (e) {
+      toast("Couldn't save — are you online?");
+    } finally { setBusy(false); }
+  }
+
   async function deleteWishRow(rowNumber) {
     await api(":batchUpdate", {
       method: "POST",
@@ -578,6 +597,7 @@
           </div>
           <div class="wish-actions">
             <button class="chip-btn got" data-got="${idx}">Got it!</button>
+            <button class="chip-btn" data-editwish="${idx}">Edit</button>
             <button class="chip-btn" data-unwish="${idx}">Remove</button>
           </div>
         </div>`);
@@ -597,13 +617,14 @@
   }
 
   // ---------- add sheet UI ----------
-  function openSheet(mode, prefill, editRow) {
+  function openSheet(mode, prefill, editRow, editWishRow) {
     state.editRow = editRow || null;
+    state.editWishRow = editWishRow || null;
     state.addMode = mode || "record";
     $("#add-sheet").classList.remove("hidden");
     $("#sheet-backdrop").classList.remove("hidden");
-    // Editing is always a record — hide the record/wish toggle in that case.
-    $(".sheet-segments").classList.toggle("hidden", !!state.editRow);
+    // When editing, hide the record/wish toggle (the kind is already fixed).
+    $(".sheet-segments").classList.toggle("hidden", !!(state.editRow || state.editWishRow));
     document.querySelectorAll("[data-addmode]").forEach((b) =>
       b.classList.toggle("active", b.dataset.addmode === state.addMode));
     applyAddMode();
@@ -627,6 +648,7 @@
       if (prefill.notes !== undefined) form.notes.value = prefill.notes || "";
     }
     if (state.editRow) $("#save-add").textContent = "Update record";
+    if (state.editWishRow) $("#save-add").textContent = "Update wish";
     // genre suggestions: the curated list plus any genres already in the sheet
     const genres = [...new Set([...GENRE_VALUES, ...state.collection.map((i) => i.genre)].filter(Boolean))].sort();
     $("#genre-list").innerHTML = genres.map((g) => `<option value="${esc(g)}">`).join("");
@@ -649,13 +671,14 @@
     $("#sheet-backdrop").classList.add("hidden");
     state.pendingWishRow = null;
     state.editRow = null;
+    state.editWishRow = null;
   }
 
   function checkDup() {
     const f = $("#add-form");
     const a = norm(f.artist.value), t = norm(f.title.value);
     const warn = $("#dup-warning");
-    if (state.editRow) { warn.classList.add("hidden"); return; }
+    if (state.editRow || state.editWishRow) { warn.classList.add("hidden"); return; }
     if (!a && !t) { warn.classList.add("hidden"); return; }
     const dup = state.collection.find((i) =>
       (a && norm(i.artist).includes(a) || !a) &&
@@ -747,6 +770,10 @@
         if (!data.location || !data.price || !data.currency || !data.date)
           return toast("Purchase info is required (where, price, currency, date)");
         updateRecord(state.editRow, data);
+      } else if (state.editWishRow) {
+        if (!data.artist && !data.title && !data.genre)
+          return toast("Give the wish at least an artist, title, or genre");
+        updateWish(state.editWishRow, data);
       } else if (state.addMode === "record") {
         if (!data.artist || !data.title) return toast("Artist and title are required");
         if (!data.location || !data.price || !data.currency || !data.date)
@@ -770,6 +797,10 @@
         state.pendingWishRow = w.row;
         openSheet("record", w);
         toast("Fill in the purchase — the wish clears itself when you save");
+      }
+      else if (btn.dataset.editwish !== undefined) {
+        const w = render._wishHits[+btn.dataset.editwish];
+        openSheet("wish", { artist: w.artist, title: w.title, genre: w.genre, notes: w.notes }, null, w.row);
       }
       else if (btn.dataset.unwish !== undefined) removeWish(render._wishHits[+btn.dataset.unwish]);
       else if (btn.dataset.wishquick !== undefined) {
