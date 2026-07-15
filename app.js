@@ -542,6 +542,252 @@
     } finally { setBusy(false); }
   }
 
+  // ---------- one-time genre importer ----------
+  // Keyed by the collection's own artist/album text (typos preserved) so it
+  // matches existing rows. matchKey() strips case/accents/punctuation so small
+  // formatting differences still line up. Only BLANK Genre cells are filled.
+  const matchKey = (s) => (s || "").toString().toLowerCase().normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+
+  const GENRE_FILL = [
+    ["Angel Bat Dawid", "The Oracle", "Jazz"],
+    ["Arooj Aftab", "Love in Exile", "Jazz"],
+    ["Arooj Aftab", "Night Reign", "World"],
+    ["Arooj Aftab", "Vulture Prince", "World"],
+    ["Asim Saha", "Asim Saha and friends", "World"],
+    ["Billie Holiday", "Lady in Satin", "Jazz Vocal"],
+    ["Black Jesus Experience", "Good Evening Black Buddha", "Afrobeat"],
+    ["Bob Dylan", "Blonde on Blonde", "Rock"],
+    ["Bob Dylan", "Bringing it all Back Home", "Folk"],
+    ["Bob Dylan", "Freewheelin's Bob Dylan", "Folk"],
+    ["Bob Dylan", "Highway 61 Revisited", "Rock"],
+    ["Bob Dylan", "Slow Train Coming", "Gospel"],
+    ["Carlos Montoya", "Adventures in Flamenco", "Flamenco"],
+    ["Carmen McRae", "Bittersweet", "Jazz Vocal"],
+    ["Carmen McRae", "Havent we Met?", "Jazz Vocal"],
+    ["Carmen McRae", "Ms. Jazz", "Jazz Vocal"],
+    ["Carmen McRae", "Two for the Road", "Jazz Vocal"],
+    ["Carmen McRae", "You're Lookin' at me", "Jazz Vocal"],
+    ["Cesario Evora", "Mar Azul", "Morna"],
+    ["Cheikh Lo", "Ne La Thiass", "West African"],
+    ["Clark Terry", "Clark Terry", "Jazz"],
+    ["Cliff Richard", "Love Songs", "Pop"],
+    ["Crosby, Stills and Nash", "Crosby, Stills and Nash (Original)", "Folk"],
+    ["Crosby, Stills, Nash & Young", "Deja Vu", "Folk"],
+    ["Daave Brubeck", "Time Out", "Jazz"],
+    ["Domani", "Wawamba", "World"],
+    ["Donovan", "Fairy Tale", "Folk"],
+    ["El Titi", "Toros y Coplas", "Flamenco"],
+    ["Ella Fitzgerald", "At the Opera House", "Jazz Vocal"],
+    ["Eric Clapton", "Backless", "Rock"],
+    ["Erykah Badu", "Amerykah", "Soul"],
+    ["Erykah Badu", "Baduizm", "Soul"],
+    ["Erykah Badu", "But you caint use my phone", "Soul"],
+    ["Erykah Badu", "Mama's Gun", "Soul"],
+    ["Esparanza Spalding", "Radio Music Society", "Jazz"],
+    ["Frank Sinatra", "My One and Only Love", "Jazz Vocal"],
+    ["Fred Neil", "Everybody's Talking", "Folk"],
+    ["Fred Neil", "Sessions", "Folk"],
+    ["Freddie Hubbard", "The Body and the Soul", "Jazz"],
+    ["Gil Scott-Heron", "Real Eyes", "Soul"],
+    ["Gil Scott-Heron", "The Mind of Gil-Scott Heron", "Spoken Word"],
+    ["Gil Scott-Heron & Brian Jackson", "Gil Scott-Heron & Brian Jackson", "Soul"],
+    ["Gil Scott-Heron & Brian Jackson", "Winter in America", "Soul"],
+    ["Gill Scott-Heron and Brian Jackson", "Midnight Band", "Soul"],
+    ["Gordon Lightfoot", "Gord's Gold", "Folk"],
+    ["Graciela Susana", "Guitarra, Dimelo Tu", "Latin"],
+    ["Graciela Susana", "Love and Parting", "Latin"],
+    ["Graham Nash", "Songs for Beginners", "Folk"],
+    ["Hans Zimmer", "The Dark Knight", "Western Soundtrack"],
+    ["Helen Humes", "Sneakin' Around", "Jazz Vocal"],
+    ["Horace Silver", "Songs for my father", "Jazz"],
+    ["Irene Reid", "Room for one more", "Jazz Vocal"],
+    ["Jalousie", "Yehudi Menuhin Stephanie Grappeli", "Jazz"],
+    ["Janis Joplin", "Janis Joplin's Greatest Hits", "Rock"],
+    ["Jeff Beck", "Blow by Blow", "Jazz Fusion"],
+    ["Jimi Hendrix", "Band of Gypsys", "Rock"],
+    ["Jimi Hendrix", "Axis: Bold as Love", "Psychedelic"],
+    ["Joachim-Ernst-Berendt", "Was ist jazz?", "Jazz"],
+    ["Joan Baez", "Farewell, Angelina", "Folk"],
+    ["Joan Baez", "From Every Stage", "Folk"],
+    ["Joao Braga", "cantigas de mar e magoa", "Fado"],
+    ["Joao Queiroz", "Canta Baladas e Fados de Coimbra", "Fado"],
+    ["Johmy \"Hammond\" Smith", "Soul Talk", "Jazz"],
+    ["John Coltrane", "My favorite things", "Jazz"],
+    ["John Coltrane", "Giant Steps", "Jazz"],
+    ["John Denver", "I want to live", "Folk"],
+    ["John Lee Hooker", "The Real Folk Songs", "Blues"],
+    ["John Lennon", "Gimme some truth", "Rock"],
+    ["John Rowles", "If only I had time", "Pop"],
+    ["Joni Mitchell", "Shadows and Light", "Folk"],
+    ["Jose Afonso", "Cantigas do Maio", "Portuguese"],
+    ["Juliette Greco", "Best Applause", "French Jazz"],
+    ["L Subramaniam", "Spanish Wave", "Jazz Fusion"],
+    ["L Subramaniam Stephane Grappelli", "Conversations", "Jazz Fusion"],
+    ["Lena Horne", "The Lena Horne Collection", "Jazz Vocal"],
+    ["Leonard Cohen", "Dear Heather", "Folk"],
+    ["Leonard Cohen", "Death of a Ladies' Man", "Folk"],
+    ["Leonard Cohen", "I'm your man", "Folk"],
+    ["Leonard Cohen", "New Skin for the Old Ceremony", "Folk"],
+    ["Leonard Cohen", "Recent Songs", "Folk"],
+    ["Leonard Cohen", "Songs from a room", "Folk"],
+    ["Leonard Cohen", "Songs of Leonard Cohen", "Folk"],
+    ["Leonard Cohen", "Songs of Love and Hate", "Folk"],
+    ["Leonard Cohen", "Thanks for the Dance", "Folk"],
+    ["Leonard Cohen", "Various Positions", "Folk"],
+    ["Leonard Cohen", "You Want It Darker", "Folk"],
+    ["Lou Rawls", "Lou Rawls Live", "Soul"],
+    ["Louis Armstrong and WC Handy", "Louis Armstrong and WC Handy", "Jazz"],
+    ["Lovin' Spoonful", "The best of Lovin' Spoonful", "Rock"],
+    ["Manitas de Plata", "et ses guitares gitanes", "Flamenco"],
+    ["Manuel de Almeida", "Manuel de Almeida", "Fado"],
+    ["Maple Glider", "To Enjoy Is the Only Thing", "Indie / Alternative"],
+    ["Maria", "Car mi nho", "Fado"],
+    ["Mariza", "Mariza Canta Amalia", "Fado"],
+    ["Marvin Gaye", "Whats going on", "Soul"],
+    ["MCoy Tyner", "Sahara", "Jazz"],
+    ["Miles Davis", "Amandla", "Jazz Fusion"],
+    ["Miles Davis", "Miles Smiles", "Jazz"],
+    ["Morning Phase", "Beck", "Indie / Alternative"],
+    ["Nana Vasconcelos", "Bush Dance", "World"],
+    ["Narciso Yepes", "Spanish Guitar Music of 5 centuries Vol 2", "Western Classical"],
+    ["Neil Young", "Comes a time", "Folk"],
+    ["Nick Cave and the Bad Seeds", "The Boatman's Call", "Indie / Alternative"],
+    ["Nick Cave and Warren Ellis", "Carnage", "Indie / Alternative"],
+    ["Nina Simone", "Ballads and Blues", "Jazz Vocal"],
+    ["Nina Simone", "Baltimore", "Soul"],
+    ["Nina Simone", "Here comes the sun", "Jazz Vocal"],
+    ["Nina Simone", "It is finished", "Soul"],
+    ["Nina Simone", "Lady Midnight", "Jazz Vocal"],
+    ["Nina Simone", "Let it be me", "Jazz Vocal"],
+    ["Nina Simone", "Little Girl Blue", "Jazz Vocal"],
+    ["Nina Simone", "Live in Europe", "Jazz Vocal"],
+    ["Nina Simone", "Nina Simone at Carnegie Hall", "Jazz Vocal"],
+    ["Nina Simone", "Nina Simone in Concert", "Jazz Vocal"],
+    ["Nina Simone", "Nina Simone in Concert Emergency Ward", "Jazz Vocal"],
+    ["Nina Simone", "Nina Simone sings Ellington", "Jazz Vocal"],
+    ["Nina Simone", "Pastel Blues", "Blues"],
+    ["Nina Simone", "Simone at Town Hall", "Jazz Vocal"],
+    ["Nina Simone", "The Amazing Nina Simone", "Jazz Vocal"],
+    ["Nina Simone", "Wild is the Winf", "Jazz Vocal"],
+    ["Nina Simone", "Silk and Soul", "Soul"],
+    ["Nusrat Fateh Ali Khan and Party Shabaaz", "Nusrat Fateh Ali Khan and Party Shabaaz", "World"],
+    ["Olatunji", "Drums! Drums! Drums!", "West African"],
+    ["Olatunji", "Flaming Drums", "West African"],
+    ["Paco de Lucia", "Siroco", "Flamenco"],
+    ["Pandit Jasraj", "Pandit Jasraj", "Indian Classical Vocal"],
+    ["Paul Kelly and Charlie Owen", "Death's Dateless Night", "Folk"],
+    ["Pedro Iturralde", "Jazz Flamenco 1", "Jazz Fusion"],
+    ["Pink Floyd", "Atom Heart Mother", "Progressive Rock"],
+    ["Pink Floyd", "Later Years *(1987-2019)", "Progressive Rock"],
+    ["Placido Domingo", "Perhaps Love", "Pop"],
+    ["Preservation Hall Jazz Band", "New Orleans: Sweet Emma and her Preservation Hall Jazz Band", "Jazz"],
+    ["Preservation Hall Jazz Band", "Preservation Hall Jazz Band", "Jazz"],
+    ["Quincy Jones", "Smackwater Jack", "Jazz"],
+    ["Ravi Shankar", "Live Ravi Shankar at the Monterey Jazz Festival", "Indian Classical"],
+    ["Richard Thompson", "A Collection of Unreleased and Rare Material", "Folk"],
+    ["Richie Havens", "Something else again", "Folk"],
+    ["Rodriguez", "Cold Fact", "Folk"],
+    ["Rodriguez", "Coming from Reality", "Folk"],
+    ["Rosemary Clooney", "Sings the Lyrics of Ira Gershwin", "Jazz Vocal"],
+    ["Sarah Vaughn", "After hours", "Jazz Vocal"],
+    ["Sarah Vaughn", "Feelin' Good", "Jazz Vocal"],
+    ["Sarah Vaughn", "The George Gershwin Songbook", "Jazz Vocal"],
+    ["Sarah Vaughn", "Afterhours", "Jazz Vocal"],
+    ["Sarah Vaughn", "Crazy and Mixed Up", "Jazz Vocal"],
+    ["Sarah Vaughn", "Sarah Vaughn", "Jazz Vocal"],
+    ["Sarah Vaughn", "The Divine One", "Jazz Vocal"],
+    ["Sarah Vaughn", "The Fabulous Sarah Vaughn with Count Basie and his orchestra", "Jazz Vocal"],
+    ["Sarah Vaughn", "The Man I Love", "Jazz Vocal"],
+    ["Sarah Vaughn and Duke Ellington", "Songbook Two", "Jazz Vocal"],
+    ["Shirley Bassey", "Somebody loves me", "Pop"],
+    ["Shirley Bassey", "You take my heart away", "Pop"],
+    ["Shirley Horn", "Embers and Ashes", "Jazz Vocal"],
+    ["Shirley Horn", "I thought about you", "Jazz Vocal"],
+    ["Shirley Horn", "Softly Transparent", "Jazz Vocal"],
+    ["Shirley Horn Trio", "A Lazy Afternoon", "Jazz Vocal"],
+    ["Simon and Garfunkel", "Simon and Garfunkel's Greatest Hits", "Folk"],
+    ["Sly and the Family Stone", "There's a Riot Goin' on", "Funk"],
+    ["Son Palenque", "Ane Jue Ellos Son", "Colombian"],
+    ["Stan Getz and Charlie Byrd", "Jazz Samba", "Bossa Nova"],
+    ["Stan Getz and Joao Gilberto", "Getz/Gilberto", "Bossa Nova"],
+    ["The Doors", "Morrison Hotel", "Rock"],
+    ["The Doors", "The Doors", "Rock"],
+    ["The Rolling Stones", "Flowers", "Rock"],
+    ["The Rolling Stones", "Some girls", "Rock"],
+    ["The Techniques", "Queen Majesty", "Reggae"],
+    ["Thelonious Monk", "Misterioso", "Jazz"],
+    ["Thelonious Monk", "Monk's Dream", "Jazz"],
+    ["Tim Hardin", "Tim Hardin 3 Live in Concert", "Folk"],
+    ["Tom Waits", "Los Angeles July 23rd 1974, Unplugged Live", "Jazz"],
+    ["Tom Waitts", "Blue Valentine", "Jazz"],
+    ["Tom Waitts", "Foreign Affairs", "Jazz"],
+    ["Tom Waitts", "Nighthawks at the diner", "Jazz"],
+    ["Tom Waitts and Crystal Gale", "One from the Heart Soundtrack", "Western Soundtrack"],
+    ["Toumani Diabate", "Kaira", "West African"],
+    ["Van Morrison", "His Band and the Street Choir", "Rock"],
+    ["Van Morrison", "Moondance", "Rock"],
+    ["Van Morrison", "Tupelo Honey", "Rock"],
+    ["Various", "Anthology of Spanish Folklore Music", "Spanish"],
+    ["Various", "Binaca Geet Mala A Silver Jubliee Presentation, Vol 1", "Bollywood"],
+    ["Various", "Binaca Geet Mala A Silver Jubliee Presentation, Vol 1I", "Bollywood"],
+    ["Various", "El Angel Musical Flamenco", "Flamenco"],
+    ["Various", "Folk Music of Ghana", "West African"],
+    ["Various", "Global Vilage", "World"],
+    ["Various", "Hare Rama Hare Krishna", "Bollywood Soundtrack"],
+    ["Various", "Memories of Portugal", "Portuguese"],
+    ["Various", "Musik der Nubier NordSudan", "World"],
+    ["Various", "The Color Purple Soundtrack", "Western Soundtrack"],
+    ["Various", "The Concert for Bangladesh", "Rock"],
+    ["Various", "The Endless Colored Ways - The songs of Nick Drake", "Indie / Alternative"],
+    ["Various", "The History of Jazz Volumne 1 N'Orleans Origins", "Jazz"],
+    ["Various", "The History of Jazz Volumne 2 The Turbulent 'Twenties", "Jazz"],
+    ["Various", "The History of Jazz Volumne 3 Everybody Swings", "Jazz"],
+    ["Various", "The History of Jazz Volumne 4 Enter the Cool", "Jazz"],
+    ["Various", "The Living Tradition Religions of India", "Traditional"],
+    ["Various", "The origins of Congo and Zambia guitar music 1957-1958", "World"],
+    ["Various", "The Violin Summit", "Jazz"],
+    ["Various", "The Voices and Drums of Africa", "World"],
+    ["Various", "Woodstock", "Rock"],
+    ["Various", "Woodstock two", "Rock"],
+    ["Wes Montgomery", "A Day in the Life", "Jazz"],
+    ["Wes Montgomery", "The incredible jazz guitar of Wes Montgomery", "Jazz"],
+    ["Xylouris White", "The Sisypheans", "World"],
+    ["Zakir, Chaurasia, McLaughlin, Jan Garbarek", "Making Music", "Jazz Fusion"],
+  ];
+
+  async function fillGenres() {
+    const gCol = state.col["Genre"];
+    if (gCol === undefined) return toast("No Genre column in this sheet");
+    const map = new Map();
+    GENRE_FILL.forEach(([a, b, g]) => map.set(matchKey(a) + "|" + matchKey(b), g));
+
+    const t = state.collectionSheet.title;
+    const updates = [];
+    let unmatched = 0;
+    for (const item of state.collection) {
+      if ((item.genre || "").trim()) continue; // only fill blanks
+      const g = map.get(matchKey(item.artist) + "|" + matchKey(item.title));
+      if (g) updates.push({ range: `${t}!${colLetter(gCol)}${item.row}`, values: [[g]] });
+      else unmatched++;
+    }
+    if (!updates.length) return toast("No blank genres matched the built-in list");
+    if (!confirm(`Fill in ${updates.length} blank genre${updates.length > 1 ? "s" : ""} from the built-in list?`)) return;
+
+    setBusy(true);
+    try {
+      await api("/values:batchUpdate", {
+        method: "POST",
+        body: JSON.stringify({ valueInputOption: "USER_ENTERED", data: updates }),
+      });
+      await loadData();
+      toast(`Filled ${updates.length} genres ✓` + (unmatched ? ` (${unmatched} still blank)` : ""));
+      render();
+    } catch (e) {
+      toast("Couldn't fill genres — are you online?");
+    } finally { setBusy(false); }
+  }
+
   // ---------- search & render ----------
   function matches(item, terms) {
     const hay = norm(item.artist + " " + item.title + " " + item.genre);
@@ -733,6 +979,7 @@
       catch (e) { err.textContent = "Sign-in didn't complete. Try again."; err.classList.remove("hidden"); }
     });
     $("#signout-btn").addEventListener("click", signOut);
+    $("#fill-genres-btn").addEventListener("click", fillGenres);
     $("#refresh-btn").addEventListener("click", showApp);
     $("#search-input").addEventListener("input", render);
     document.querySelectorAll(".segments [data-scope]").forEach((b) =>
