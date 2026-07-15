@@ -30,7 +30,34 @@
     "Soundtrack", "Spanish", "Spoken Word", "Synth-Pop", "Techno", "Traditional",
     "West African", "Western Classical", "Western Soundtrack", "World",
   ];
-  const VALIDATION_VERSION = "v5";
+  // Countries for the Country dropdown (field still accepts anything you type).
+  const COUNTRY_VALUES = [
+    "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Argentina",
+    "Armenia", "Australia", "Austria", "Azerbaijan", "Bahamas", "Bahrain",
+    "Bangladesh", "Barbados", "Belarus", "Belgium", "Belize", "Benin", "Bolivia",
+    "Bosnia and Herzegovina", "Botswana", "Brazil", "Bulgaria", "Burkina Faso",
+    "Cambodia", "Cameroon", "Canada", "Cape Verde", "Chile", "China", "Colombia",
+    "Congo", "Costa Rica", "Croatia", "Cuba", "Cyprus", "Czechia", "Denmark",
+    "Dominican Republic", "Ecuador", "Egypt", "El Salvador", "Estonia",
+    "Ethiopia", "Finland", "France", "Gabon", "Gambia", "Georgia", "Germany",
+    "Ghana", "Greece", "Guatemala", "Guinea", "Haiti", "Honduras", "Hungary",
+    "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland", "Israel",
+    "Italy", "Ivory Coast", "Jamaica", "Japan", "Jordan", "Kazakhstan", "Kenya",
+    "Kuwait", "Laos", "Latvia", "Lebanon", "Liberia", "Libya", "Lithuania",
+    "Luxembourg", "Madagascar", "Malaysia", "Mali", "Malta", "Mauritius",
+    "Mexico", "Moldova", "Monaco", "Mongolia", "Montenegro", "Morocco",
+    "Mozambique", "Myanmar", "Nepal", "Netherlands", "New Zealand", "Nicaragua",
+    "Niger", "Nigeria", "North Macedonia", "Norway", "Oman", "Pakistan",
+    "Panama", "Paraguay", "Peru", "Philippines", "Poland", "Portugal", "Qatar",
+    "Romania", "Russia", "Rwanda", "Saudi Arabia", "Senegal", "Serbia",
+    "Singapore", "Slovakia", "Slovenia", "Somalia", "South Africa",
+    "South Korea", "Spain", "Sri Lanka", "Sudan", "Sweden", "Switzerland",
+    "Syria", "Taiwan", "Tanzania", "Thailand", "Togo", "Trinidad and Tobago",
+    "Tunisia", "Turkey", "Uganda", "Ukraine", "United Arab Emirates",
+    "United Kingdom", "United States", "Uruguay", "Uzbekistan", "Venezuela",
+    "Vietnam", "Yemen", "Zambia", "Zimbabwe",
+  ];
+  const VALIDATION_VERSION = "v6";
 
   // ---------- state ----------
   const state = {
@@ -248,6 +275,7 @@
     rule("Rating", RATING_VALUES);
     rule("Format", FORMAT_VALUES);
     rule("Genre", GENRE_VALUES);
+    rule("Country", COUNTRY_VALUES);
 
     // 3. Fix number/date formats on the columns the app writes.
     const fmt = (colName, numberFormat) => {
@@ -602,6 +630,9 @@
     // genre suggestions: the curated list plus any genres already in the sheet
     const genres = [...new Set([...GENRE_VALUES, ...state.collection.map((i) => i.genre)].filter(Boolean))].sort();
     $("#genre-list").innerHTML = genres.map((g) => `<option value="${esc(g)}">`).join("");
+    // country suggestions: the country list plus any already in the sheet
+    const countries = [...new Set([...COUNTRY_VALUES, ...state.collection.map((i) => i.country)].filter(Boolean))].sort();
+    $("#country-list").innerHTML = countries.map((c) => `<option value="${esc(c)}">`).join("");
     checkDup();
     setTimeout(() => form.artist.focus(), 60);
   }

@@ -96,8 +96,9 @@
         <label>Where bought *<input name="location" placeholder="Shop or venue" autocomplete="off" /></label>
         <div class="grid2">
           <label>City<input name="city" autocomplete="off" /></label>
-          <label>Country<input name="country" autocomplete="off" /></label>
+          <label>Country<input name="country" list="country-list" autocomplete="off" /></label>
         </div>
+        <datalist id="country-list"></datalist>
         <div class="grid3">
           <label>Price *<input name="price" inputmode="decimal" autocomplete="off" /></label>
           <label>Currency *<input name="currency" value="EUR" autocomplete="off" /></label>
