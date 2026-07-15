@@ -6,7 +6,8 @@
       or set the exact tab name.                              */
 window.CONFIG = {
   CLIENT_ID: "439826223009-h37rll8c851ic75hm6kqh0dsbcvome56.apps.googleusercontent.com",
-  SPREADSHEET_ID: "132m5Ok9N7g3G1TRN40B4DKDezjv4NWc2a0N1gn_0gdQ",
+  // Test/duplicate sheet — the original stays untouched until the app is final.
+  SPREADSHEET_ID: "1Wi9CkkJCQWZmTVzscd3w5l2Hateo4O_kIpVWn0s59EE",
   COLLECTION_SHEET: "",
   WISHLIST_SHEET: "Wishlist",
 };

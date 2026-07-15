@@ -9,8 +9,14 @@
   const API = "https://sheets.googleapis.com/v4/spreadsheets/" + C.SPREADSHEET_ID;
 
   // Columns the app guarantees exist on the collection tab.
-  const APP_COLUMNS = ["Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
+  const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
   const WISH_HEADER = ["Artist", "Title", "Genre", "Notes", "Added"];
+
+  // Allowed dropdown values the app enforces in the sheet. Change these lists
+  // (and bump VALIDATION_VERSION) to re-apply new choices on next launch.
+  const CONDITION_VALUES = ["New", "Used"];
+  const RATING_VALUES = ["1", "2", "3", "4", "5"];
+  const VALIDATION_VERSION = "v1";
 
   // ---------- state ----------
   const state = {
@@ -168,6 +174,42 @@
     state.headers = headers;
     state.col = {};
     headers.forEach((h, i) => { state.col[h] = i; });
+
+    // Correct the Condition/Rating dropdowns (once per device per version).
+    try {
+      const flag = "valfix33:" + C.SPREADSHEET_ID + ":" + VALIDATION_VERSION;
+      if (!localStorage.getItem(flag)) {
+        await fixValidation();
+        localStorage.setItem(flag, "1");
+      }
+    } catch (_) { /* validation is best-effort; never block loading over it */ }
+  }
+
+  // Replace whatever data-validation the Condition/Rating columns had (they were
+  // set to Yes/No) with the app's real allowed values.
+  async function fixValidation() {
+    const sid = state.collectionSheet.sheetId;
+    const requests = [];
+    const rule = (colName, values) => {
+      const idx = state.col[colName];
+      if (idx === undefined) return;
+      requests.push({
+        setDataValidation: {
+          // startRowIndex 1 skips the header; omitting endRowIndex covers the column.
+          range: { sheetId: sid, startRowIndex: 1, startColumnIndex: idx, endColumnIndex: idx + 1 },
+          rule: {
+            condition: { type: "ONE_OF_LIST", values: values.map((v) => ({ userEnteredValue: v })) },
+            showCustomUi: true,
+            strict: false, // don't reject existing Yes/No cells, just offer the right list
+          },
+        },
+      });
+    };
+    rule("Condition", CONDITION_VALUES);
+    rule("Rating", RATING_VALUES);
+    if (requests.length) {
+      await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests }) });
+    }
   }
 
   function hv(row, name) { // header value
@@ -190,6 +232,8 @@
       title: hv(r, "Album Name") || hv(r, "Title"),
       genre: hv(r, "Genre"),
       location: hv(r, "Location"),
+      city: hv(r, "City"),
+      country: hv(r, "Country"),
       year: hv(r, "Year"),
       format: hv(r, "Format"),
       condition: hv(r, "Condition"),
@@ -251,7 +295,7 @@
     const maxSN = state.collection.reduce((m) => m + 1, 1);
     put("SN", String(maxSN));
     put("Artist", f.artist); put("Album Name", f.title); put("Genre", f.genre);
-    put("Location", f.location); put("Year", f.year);
+    put("Location", f.location); put("City", f.city); put("Country", f.country); put("Year", f.year);
     put("Date", f.date); put("Original Cost", f.price); put("Original Currency", f.currency);
     if (norm(f.currency) === "usd") put("Cost (USD)", f.price);
     put("Format", f.format); put("Condition", f.condition); put("Notes", f.notes);
@@ -306,6 +350,8 @@
         title: g("Album Name") || g("Title"),
         genre: g("Genre"),
         location: g("Location"),
+        city: g("City"),
+        country: g("Country"),
         year: g("Year") === "" ? "" : String(g("Year")),
         format: g("Format"),
         condition: g("Condition"),
@@ -329,7 +375,7 @@
     };
     set("Artist", f.artist);
     set("Album Name", f.title); set("Title", f.title); // whichever column the sheet uses
-    set("Genre", f.genre); set("Location", f.location); set("Year", f.year);
+    set("Genre", f.genre); set("Location", f.location); set("City", f.city); set("Country", f.country); set("Year", f.year);
     set("Date", f.date); set("Original Cost", f.price); set("Original Currency", f.currency);
     if (norm(f.currency) === "usd") set("Cost (USD)", f.price);
     set("Format", f.format); set("Condition", f.condition); set("Notes", f.notes);
@@ -420,7 +466,7 @@
           <div class="card-main">
             <div class="card-title">${esc(i.title)}</div>
             <div class="card-artist">${esc(i.artist)}</div>
-            <div class="card-meta">${esc([i.genre, i.format, i.year, i.location].filter(Boolean).join(" · "))}</div>
+            <div class="card-meta">${esc([i.genre, i.format, i.year, i.location, i.city, i.country].filter(Boolean).join(" · "))}</div>
             ${i.notes ? `<div class="card-notes">${esc(i.notes)}</div>` : ""}
           </div>
           <div class="rec-actions">
@@ -488,6 +534,8 @@
       if (prefill.format) form.format.value = prefill.format;
       if (prefill.condition) form.condition.value = prefill.condition;
       if (prefill.location !== undefined) form.location.value = prefill.location || "";
+      if (prefill.city !== undefined) form.city.value = prefill.city || "";
+      if (prefill.country !== undefined) form.country.value = prefill.country || "";
       if (prefill.price !== undefined) form.price.value = prefill.price || "";
       if (prefill.currency) form.currency.value = prefill.currency;
       if (prefill.date) form.date.value = prefill.date;
@@ -600,7 +648,8 @@
         artist: f.artist.value.trim(), title: f.title.value.trim(),
         genre: f.genre.value.trim(), year: f.year.value.trim(),
         format: f.format.value, condition: f.condition.value,
-        location: f.location.value.trim(), price: f.price.value.trim(),
+        location: f.location.value.trim(), city: f.city.value.trim(),
+        country: f.country.value.trim(), price: f.price.value.trim(),
         currency: f.currency.value.trim(), date: f.date.value,
         notes: f.notes.value.trim(),
       };
