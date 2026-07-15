@@ -16,7 +16,21 @@
   // (and bump VALIDATION_VERSION) to re-apply new choices on next launch.
   const CONDITION_VALUES = ["New", "Used"];
   const RATING_VALUES = ["1", "2", "3", "4", "5"];
-  const VALIDATION_VERSION = "v1";
+  const FORMAT_VALUES = ["LP", "2xLP", "EP", "7\"", "10\"", "Box set"];
+  // Suggested genres (the field still accepts anything you type).
+  const GENRE_VALUES = [
+    "Acoustic", "Afrobeat", "Ambient", "Americana / Bluegrass", "Blues",
+    "Bollywood", "Bollywood Soundtrack", "Bossa Nova", "Classic Rock", "Colombian",
+    "Country", "Cuban", "Disco", "Electronic", "Experimental", "Fado", "Flamenco",
+    "Folk", "French Jazz", "Funk", "Ghazals", "Gospel", "Hip-Hop / Rap", "House",
+    "Indian Classical", "Indian Classical Vocal", "Indie / Alternative", "Jazz",
+    "Jazz Fusion", "Jazz Vocal", "Latin", "Metal", "Middle Eastern", "Morna",
+    "New Wave / Post-Punk", "Opera", "Pizzica", "Pop", "Portuguese",
+    "Progressive Rock", "Psychedelic", "Punk", "R&B", "Reggae", "Rock", "Soul",
+    "Soundtrack", "Spanish", "Spoken Word", "Synth-Pop", "Techno", "Traditional",
+    "West African", "Western Classical", "Western Soundtrack", "World",
+  ];
+  const VALIDATION_VERSION = "v2";
 
   // ---------- state ----------
   const state = {
@@ -182,7 +196,10 @@
         await fixValidation();
         localStorage.setItem(flag, "1");
       }
-    } catch (_) { /* validation is best-effort; never block loading over it */ }
+    } catch (e) {
+      // Best-effort; never block loading over it — but log so it's diagnosable.
+      console.error("Dropdown validation fix failed:", e);
+    }
   }
 
   // Replace whatever data-validation the Condition/Rating columns had (they were
@@ -207,6 +224,8 @@
     };
     rule("Condition", CONDITION_VALUES);
     rule("Rating", RATING_VALUES);
+    rule("Format", FORMAT_VALUES);
+    rule("Genre", GENRE_VALUES);
     if (requests.length) {
       await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests }) });
     }
@@ -542,8 +561,8 @@
       if (prefill.notes !== undefined) form.notes.value = prefill.notes || "";
     }
     if (state.editRow) $("#save-add").textContent = "Update record";
-    // genre suggestions from existing data
-    const genres = [...new Set(state.collection.map((i) => i.genre).filter(Boolean))].sort();
+    // genre suggestions: the curated list plus any genres already in the sheet
+    const genres = [...new Set([...GENRE_VALUES, ...state.collection.map((i) => i.genre)].filter(Boolean))].sort();
     $("#genre-list").innerHTML = genres.map((g) => `<option value="${esc(g)}">`).join("");
     checkDup();
     setTimeout(() => form.artist.focus(), 60);
