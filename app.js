@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "22";
+  const APP_VERSION = "23";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -70,13 +70,28 @@
     "United Kingdom", "United States", "Uruguay", "Uzbekistan", "Venezuela",
     "Vietnam", "Yemen", "Zambia", "Zimbabwe",
   ];
-  const VALIDATION_VERSION = "v6";
+  const VALIDATION_VERSION = "v7";
 
   // ---------- admin settings (Phase 1) ----------
   // Editable per-field settings. Defaults here; overrides load from a hidden
   // "33Settings" tab in the sheet so they travel with the data. Field keys match
   // the form input names.
   const SETTINGS_SHEET = "33Settings";
+  // Long dropdowns (Genre 575 chars, Country 1262) blow past Sheets' ~500-char
+  // limit for inline "list of items" validation, so the values live in a hidden
+  // lookup tab and the columns validate against those ranges instead. Rewritten
+  // from the admin settings on every app load.
+  const LISTS_SHEET = "33Lists";
+  const LIST_ROWS = 300; // generous fixed range so lists can grow without re-validating
+  const LIST_SPECS = [
+    { col: "A", header: "Genre", get: () => listOf("genre") },
+    { col: "B", header: "Country", get: () => COUNTRY_VALUES },
+    { col: "C", header: "Format", get: () => listOf("format") },
+    { col: "D", header: "Condition", get: () => listOf("condition") },
+    { col: "E", header: "Rating", get: () => RATING_VALUES },
+  ];
+  // Sheet names starting with a digit must be quoted inside a formula.
+  const listRange = (col) => `='${LISTS_SHEET}'!$${col}$2:$${col}$${LIST_ROWS + 1}`;
   const FIELD_DEFS = [
     { key: "artist", label: "Artist", req: true, mode: "both" },
     { key: "title", label: "Title", req: true, mode: "both" },
@@ -443,26 +458,28 @@
       // no `rule` => clears validation in the range
     });
 
-    // 2. Re-apply the dropdowns that should exist.
-    const rule = (colName, values) => {
+    // 2. Re-apply the dropdowns, pointing at the hidden lookup tab's ranges.
+    // Range-based validation has no length limit, and the dropdown tracks the
+    // range's contents — so editing a list in Settings just rewrites that tab.
+    const rule = (colName, listCol) => {
       const idx = state.col[colName];
       if (idx === undefined) return;
       requests.push({
         setDataValidation: {
           range: { ...dataRows, startColumnIndex: idx, endColumnIndex: idx + 1 },
           rule: {
-            condition: { type: "ONE_OF_LIST", values: values.map((v) => ({ userEnteredValue: v })) },
+            condition: { type: "ONE_OF_RANGE", values: [{ userEnteredValue: listRange(listCol) }] },
             showCustomUi: true,
             strict: false, // offer the list but don't reject existing odd values
           },
         },
       });
     };
-    rule("Condition", listOf("condition"));
-    rule("Rating", RATING_VALUES);
-    rule("Format", listOf("format"));
-    rule("Genre", listOf("genre"));
-    rule("Country", COUNTRY_VALUES);
+    rule("Condition", "D");
+    rule("Rating", "E");
+    rule("Format", "C");
+    rule("Genre", "A");
+    rule("Country", "B");
 
     // 3. Fix number/date formats on the columns the app writes.
     const fmt = (colName, numberFormat) => {
@@ -577,6 +594,28 @@
       }
     } catch (_) { /* tab/cell missing → defaults */ }
     applySettings();
+  }
+
+  // Mirror every admin list into the hidden lookup tab so the sheet's dropdowns
+  // (which validate against these ranges) reflect the current settings.
+  async function syncLists() {
+    const sheets = (await api("?fields=sheets.properties")).sheets.map((s) => s.properties);
+    if (!sheets.some((s) => sameName(s.title, LISTS_SHEET))) {
+      await api(":batchUpdate", {
+        method: "POST",
+        body: JSON.stringify({ requests: [{ addSheet: { properties: { title: LISTS_SHEET, hidden: true } } }] }),
+      }).catch(() => {}); // may already exist
+    }
+    const cols = LIST_SPECS.map((s) => s.get() || []);
+    const rows = [LIST_SPECS.map((s) => s.header)];
+    for (let i = 0; i < LIST_ROWS; i++) {
+      rows.push(cols.map((c) => (c[i] == null ? "" : c[i]))); // pad so removed values are cleared
+    }
+    const last = LIST_SPECS[LIST_SPECS.length - 1].col;
+    await api("/values/" + q(`'${LISTS_SHEET}'!A1:${last}${LIST_ROWS + 1}`) + "?valueInputOption=RAW", {
+      method: "PUT",
+      body: JSON.stringify({ values: rows }),
+    });
   }
 
   async function saveSettings() {
@@ -904,8 +943,11 @@
     setBusy(true);
     try {
       await saveSettings();
-      // Re-apply the sheet's dropdowns/date format if lists or format changed.
-      if (SETTINGS.dateFormat !== prevDateFormat || JSON.stringify(SETTINGS.lists) !== prevLists) {
+      // Dropdowns read from the lookup tab, so a list change just re-syncs it.
+      if (JSON.stringify(SETTINGS.lists) !== prevLists) {
+        await syncLists().catch(() => {});
+      }
+      if (SETTINGS.dateFormat !== prevDateFormat) {
         await fixValidation().catch(() => {});
       }
       closeAdmin();
@@ -1533,7 +1575,11 @@
       await loadData();
       $("#offline-badge").classList.add("hidden");
       render();
-      maybeFixValidation(); // background; never blocks showing records
+      // Background: refresh the hidden lookup tab from the admin lists, then
+      // (re)apply the sheet's validation, which points at that tab's ranges.
+      syncLists()
+        .catch((e) => console.error("33&Me: list sync failed:", e))
+        .then(() => maybeFixValidation()); // never blocks showing records
     } catch (e) {
       if (hadCache) {
         $("#offline-badge").classList.remove("hidden");
