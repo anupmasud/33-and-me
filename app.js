@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "21";
+  const APP_VERSION = "22";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -388,6 +388,45 @@
     }
   }
 
+  // ---------- sorting ----------
+  // Keep both the sheet rows and the in-app lists in Artist → Album order.
+  const byArtistTitle = (a, b) =>
+    (a.artist || "").localeCompare(b.artist || "", undefined, { sensitivity: "base" }) ||
+    (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" });
+
+  async function sortSheet(sheetProps, specs, nCols) {
+    if (!sheetProps || !specs.length) return;
+    await api(":batchUpdate", {
+      method: "POST",
+      body: JSON.stringify({
+        requests: [{
+          sortRange: {
+            range: { sheetId: sheetProps.sheetId, startRowIndex: 1, startColumnIndex: 0, endColumnIndex: nCols },
+            sortSpecs: specs,
+          },
+        }],
+      }),
+    });
+  }
+
+  // Sort the collection tab by Artist, then album title.
+  async function sortCollection() {
+    const aIdx = state.col["Artist"];
+    if (aIdx === undefined) return;
+    const tIdx = state.col["Album Name"] !== undefined ? state.col["Album Name"] : state.col["Title"];
+    const specs = [{ dimensionIndex: aIdx, sortOrder: "ASCENDING" }];
+    if (tIdx !== undefined) specs.push({ dimensionIndex: tIdx, sortOrder: "ASCENDING" });
+    await sortSheet(state.collectionSheet, specs, state.headers.length);
+  }
+
+  // Wishlist columns are fixed: A=Artist B=Title C=Genre D=Notes E=Added.
+  async function sortWishlist() {
+    await sortSheet(state.wishlistSheet, [
+      { dimensionIndex: 0, sortOrder: "ASCENDING" },
+      { dimensionIndex: 1, sortOrder: "ASCENDING" },
+    ], 5);
+  }
+
   // The duplicated sheet had stray "Yes/No" dropdowns across many columns and
   // wrong number formats. Nuke ALL validation on the data rows, then re-apply
   // only the dropdowns we want and set proper number/date formats.
@@ -483,6 +522,11 @@
       row: i + 2,
       artist: r[0] || "", title: r[1] || "", genre: r[2] || "", notes: r[3] || "",
     })).filter((x) => x.artist || x.title || x.genre);
+
+    // Display order: Artist → Album. (Each item keeps its own sheet `row`, so
+    // sorting the arrays is safe even if the sheet itself hasn't been sorted.)
+    state.collection.sort(byArtistTitle);
+    state.wishlist.sort(byArtistTitle);
 
     localStorage.setItem("cache33:" + state.sheetId, JSON.stringify({
       ts: Date.now(), collection: state.collection, wishlist: state.wishlist,
@@ -704,6 +748,7 @@
         await deleteWishRow(state.pendingWishRow);
         state.pendingWishRow = null;
       }
+      await sortCollection().catch(() => {}); // appended at the bottom — re-sort
       await loadData();
       toast(`Added "${f.title}" to your crates ♪`);
       closeSheet(); render();
@@ -902,6 +947,7 @@
         method: "POST",
         body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
       });
+      await sortCollection().catch(() => {}); // artist/title may have changed
       await loadData();
       toast(`Updated "${f.title}" ✓`);
       closeSheet(); render();
@@ -944,6 +990,7 @@
         method: "POST",
         body: JSON.stringify({ values: [[f.artist, f.title, f.genre, f.notes, todayISO()]] }),
       });
+      await sortWishlist().catch(() => {}); // appended at the bottom — re-sort
       await loadData();
       toast("Added to wishlist ✦");
       closeSheet(); render();
@@ -962,6 +1009,7 @@
         method: "PUT",
         body: JSON.stringify({ values: [[f.artist, f.title, f.genre, f.notes]] }),
       });
+      await sortWishlist().catch(() => {}); // artist/title may have changed
       await loadData();
       toast("Wish updated ✓");
       closeSheet(); render();
