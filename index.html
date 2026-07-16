@@ -110,9 +110,10 @@
           <label><span data-fl="price"></span><span data-req="price" class="req-star"> *</span><input name="price" inputmode="decimal" autocomplete="off" /></label>
           <label><span data-fl="currency"></span><span data-req="currency" class="req-star"> *</span><input name="currency" autocomplete="off" /></label>
         </div>
-        <label>Cost (USD) <span class="field-hint">— auto-converted at today's rate</span>
-          <input name="costusd" readonly tabindex="-1" placeholder="—" />
-        </label>
+        <div class="grid2">
+          <label>Cost <span class="field-hint">— USD, auto</span><input name="costusd" readonly tabindex="-1" placeholder="—" /></label>
+          <label><span id="costpref-label">Cost</span> <span class="field-hint">— auto</span><input name="costpref" readonly tabindex="-1" placeholder="—" /></label>
+        </div>
         <div class="grid2">
           <label><span data-fl="year"></span><span data-req="year" class="req-star"> *</span><input name="year" inputmode="numeric" autocomplete="off" /></label>
           <label><span data-fl="date"></span><span data-req="date" class="req-star"> *</span><input name="date" type="date" /></label>
@@ -166,7 +167,10 @@
       Saved to a hidden tab in your sheet, so they apply on every device.</p>
     <div class="admin-head"><span>Field label</span><span>Required</span></div>
     <div id="admin-fields" class="admin-fields"></div>
-    <label>Date format<select id="admin-dateformat"></select></label>
+    <div class="grid2">
+      <label>Date format<select id="admin-dateformat"></select></label>
+      <label>Preferred currency<input id="admin-prefcur" autocomplete="off" placeholder="USD" /></label>
+    </div>
     <h3 class="admin-subhead">Dropdown values <span class="field-hint">— one per line</span></h3>
     <div class="grid2">
       <label>Format<textarea id="admin-list-format" rows="5"></textarea></label>

@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "18";
+  const APP_VERSION = "19";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -100,9 +100,11 @@
     required: Object.fromEntries(FIELD_DEFS.map((f) => [f.key, f.req])),
     lists: { format: FORMAT_VALUES.slice(), condition: CONDITION_VALUES.slice(), genre: GENRE_VALUES.slice() },
     dateFormat: "yyyy-mm-dd",
+    preferredCurrency: "USD",
     v: 2,
   });
   let SETTINGS = defaultSettings();
+  const prefCurrency = () => (SETTINGS.preferredCurrency || "USD").toUpperCase();
   const labelOf = (key) => (SETTINGS.labels && SETTINGS.labels[key]) || key;
   const requiredOf = (key) => !!(SETTINGS.required && SETTINGS.required[key]);
   const listOf = (key) => (SETTINGS.lists && SETTINGS.lists[key]) || [];
@@ -283,6 +285,37 @@
       }
     }
 
+    // Rename legacy "Cost (USD)" → "Cost", and add "Cost (Preferred)" beside it.
+    try {
+      if (!headers.includes("Cost") && headers.includes("Cost (USD)")) {
+        const ci = headers.indexOf("Cost (USD)");
+        await api("/values/" + q(`${t}!${colLetter(ci)}1`) + "?valueInputOption=USER_ENTERED", {
+          method: "PUT", body: JSON.stringify({ values: [["Cost"]] }),
+        });
+        headers[ci] = "Cost";
+      }
+      const costIdx = headers.indexOf("Cost");
+      if (costIdx >= 0 && !headers.includes("Cost (Preferred)")) {
+        await api(":batchUpdate", {
+          method: "POST",
+          body: JSON.stringify({
+            requests: [{
+              insertDimension: {
+                range: { sheetId: state.collectionSheet.sheetId, dimension: "COLUMNS", startIndex: costIdx + 1, endIndex: costIdx + 2 },
+                inheritFromBefore: false,
+              },
+            }],
+          }),
+        });
+        await api("/values/" + q(`${t}!${colLetter(costIdx + 1)}1`) + "?valueInputOption=USER_ENTERED", {
+          method: "PUT", body: JSON.stringify({ values: [["Cost (Preferred)"]] }),
+        });
+        headers = ((await api("/values/" + q(`${t}!1:1`))).values || [[]])[0] || [];
+      }
+    } catch (e) {
+      console.error("33&Me: couldn't set up Cost / Cost (Preferred) columns:", e);
+    }
+
     const missing = APP_COLUMNS.filter((h) => !headers.includes(h));
     if (missing.length) {
       headers = headers.concat(missing);
@@ -446,6 +479,7 @@
             genre: Array.isArray(pl.genre) && pl.genre.length ? pl.genre : SETTINGS.lists.genre,
           },
           dateFormat: p.dateFormat || SETTINGS.dateFormat,
+          preferredCurrency: (p.preferredCurrency || SETTINGS.preferredCurrency).toUpperCase(),
           v: p.v || 1,
         };
         // Migration: settings saved before Currency/Date/Condition were made
@@ -496,6 +530,8 @@
       setSelectOptions(form.format, listOf("format"));
       setSelectOptions(form.condition, listOf("condition"), true); // blank-first: no default
     }
+    const cpl = $("#costpref-label");
+    if (cpl) cpl.textContent = "Cost (" + prefCurrency() + ")";
   }
 
   // First required field (record mode) left empty → its label, else null.
@@ -547,24 +583,33 @@
     try { localStorage.setItem("rates33", JSON.stringify(RATES)); } catch (_) {}
     return RATES;
   }
-  // Convert an amount in `currency` to USD; returns a number or null if it can't.
-  async function toUSD(amount, currency) {
+  // Convert `amount` from one currency to another; number or null.
+  async function convert(amount, fromCur, toCur) {
     const amt = parseFloat(String(amount == null ? "" : amount).replace(/[^0-9.\-]/g, ""));
     if (!isFinite(amt)) return null;
-    const cur = String(currency || "").trim().toUpperCase();
-    if (!cur) return null;        // no currency entered → can't convert
-    if (cur === "USD") return amt;
-    const r = await getRates();
-    const rate = r.rates[cur];
-    if (!rate) return null;
-    return amt / rate;
+    const from = String(fromCur || "").trim().toUpperCase();
+    const to = String(toCur || "USD").trim().toUpperCase();
+    if (!from) return null;       // no source currency → can't convert
+    if (from === to) return amt;
+    const r = await getRates();   // rates[X] = units of X per 1 USD
+    const rFrom = from === "USD" ? 1 : r.rates[from];
+    const rTo = to === "USD" ? 1 : r.rates[to];
+    if (!rFrom || !rTo) return null;
+    return (amt / rFrom) * rTo;
   }
-  // Refresh the read-only "Cost (USD)" field from the current price/currency inputs.
-  async function updateCostUsd() {
+  const toUSD = (amount, currency) => convert(amount, currency, "USD");
+
+  // Refresh the read-only Cost (USD) and Cost (preferred) fields.
+  async function updateCosts() {
     const f = $("#add-form");
-    if (!f.costusd) return;
-    const usd = await toUSD(f.price.value, f.currency.value).catch(() => null);
-    f.costusd.value = usd == null ? "" : usd.toFixed(2);
+    if (f.costusd) {
+      const u = await convert(f.price.value, f.currency.value, "USD").catch(() => null);
+      f.costusd.value = u == null ? "" : u.toFixed(2);
+    }
+    if (f.costpref) {
+      const p = await convert(f.price.value, f.currency.value, prefCurrency()).catch(() => null);
+      f.costpref.value = p == null ? "" : p.toFixed(2);
+    }
   }
 
   async function addRecord(f) {
@@ -578,7 +623,9 @@
     put("Location", f.location); put("City", f.city); put("Country", f.country); put("Year", f.year);
     put("Date", f.date); put("Original Cost", f.price); put("Original Currency", f.currency);
     const usd = await toUSD(f.price, f.currency).catch(() => null);
-    if (usd != null) put("Cost (USD)", usd.toFixed(2));
+    if (usd != null) { put("Cost", usd.toFixed(2)); put("Cost (USD)", usd.toFixed(2)); }
+    const pref = await convert(f.price, f.currency, prefCurrency()).catch(() => null);
+    if (pref != null) put("Cost (Preferred)", pref.toFixed(2));
     put("Format", f.format); put("Condition", f.condition); put("Notes", f.notes);
     put("Listen Count", "0");
 
@@ -640,7 +687,8 @@
         condition: g("Condition"),
         price: g("Original Cost") === "" ? "" : String(g("Original Cost")),
         currency: g("Original Currency"),
-        costusd: g("Cost (USD)") === "" ? "" : String(g("Cost (USD)")),
+        costusd: String(g("Cost") || g("Cost (USD)") || ""),
+        costpref: String(g("Cost (Preferred)") || ""),
         date: toISODate(g("Date")),
         notes: g("Notes"),
       }, item.row);
@@ -659,6 +707,8 @@
     price: "Original Cost", currency: "Original Currency", year: "Year", date: "Date", notes: "Notes",
   };
   function columnLabel(header) {
+    if (header === "Cost" || header === "Cost (USD)") return "Cost";
+    if (header === "Cost (Preferred)") return "Cost (" + prefCurrency() + ")";
     for (const [key, col] of Object.entries(FIELD_COLS)) {
       if (col === header) return labelOf(key);
     }
@@ -705,6 +755,7 @@
       </div>`).join("");
     $("#admin-dateformat").innerHTML = DATE_FORMATS
       .map((f) => `<option ${f === s.dateFormat ? "selected" : ""}>${f}</option>`).join("");
+    $("#admin-prefcur").value = s.preferredCurrency || "USD";
     $("#admin-list-format").value = (s.lists.format || []).join("\n");
     $("#admin-list-condition").value = (s.lists.condition || []).join("\n");
     $("#admin-list-genre").value = (s.lists.genre || []).join("\n");
@@ -740,6 +791,7 @@
       genre: parseList("#admin-list-genre", SETTINGS.lists.genre),
     };
     SETTINGS.dateFormat = $("#admin-dateformat").value || "yyyy-mm-dd";
+    SETTINGS.preferredCurrency = ($("#admin-prefcur").value.trim() || "USD").toUpperCase();
     applySettings();
     setBusy(true);
     try {
@@ -769,7 +821,9 @@
     set("Genre", f.genre); set("Location", f.location); set("City", f.city); set("Country", f.country); set("Year", f.year);
     set("Date", f.date); set("Original Cost", f.price); set("Original Currency", f.currency);
     const usd = await toUSD(f.price, f.currency).catch(() => null);
-    if (usd != null) set("Cost (USD)", usd.toFixed(2));
+    if (usd != null) { set("Cost", usd.toFixed(2)); set("Cost (USD)", usd.toFixed(2)); }
+    const pref = await convert(f.price, f.currency, prefCurrency()).catch(() => null);
+    if (pref != null) set("Cost (Preferred)", pref.toFixed(2));
     set("Format", f.format); set("Condition", f.condition); set("Notes", f.notes);
     // Listen Count / Last Listened / SN are intentionally left untouched.
 
@@ -1228,6 +1282,7 @@
       if (prefill.price !== undefined) form.price.value = prefill.price || "";
       if (prefill.currency) form.currency.value = prefill.currency;
       if (form.costusd) form.costusd.value = prefill.costusd || "";
+      if (form.costpref) form.costpref.value = prefill.costpref || "";
       if (prefill.date) form.date.value = prefill.date;
       if (prefill.notes !== undefined) form.notes.value = prefill.notes || "";
     }
@@ -1407,8 +1462,8 @@
       }));
     $("#add-form").artist.addEventListener("input", checkDup);
     $("#add-form").title.addEventListener("input", checkDup);
-    $("#add-form").price.addEventListener("input", updateCostUsd);
-    $("#add-form").currency.addEventListener("input", updateCostUsd);
+    $("#add-form").price.addEventListener("input", updateCosts);
+    $("#add-form").currency.addEventListener("input", updateCosts);
 
     $("#add-form").addEventListener("submit", (ev) => {
       ev.preventDefault();
