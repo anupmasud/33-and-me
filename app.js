@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "23";
+  const APP_VERSION = "24";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -110,6 +110,7 @@
     { key: "notes", label: "Notes", req: false, mode: "both" },
   ];
   const DATE_FORMATS = ["yyyy-mm-dd", "dd/mm/yyyy", "mm/dd/yyyy", "d mmm yyyy"];
+  const DEFAULT_LISTS = { format: FORMAT_VALUES, condition: CONDITION_VALUES, genre: GENRE_VALUES };
   const defaultSettings = () => ({
     labels: Object.fromEntries(FIELD_DEFS.map((f) => [f.key, f.label])),
     required: Object.fromEntries(FIELD_DEFS.map((f) => [f.key, f.req])),
@@ -122,7 +123,12 @@
   const prefCurrency = () => (SETTINGS.preferredCurrency || "USD").toUpperCase();
   const labelOf = (key) => (SETTINGS.labels && SETTINGS.labels[key]) || key;
   const requiredOf = (key) => !!(SETTINGS.required && SETTINGS.required[key]);
-  const listOf = (key) => (SETTINGS.lists && SETTINGS.lists[key]) || [];
+  // Never hand back an empty list: an empty/missing saved list would silently
+  // wipe the sheet's dropdown, so fall back to the built-in defaults.
+  const listOf = (key) => {
+    const v = SETTINGS.lists && SETTINGS.lists[key];
+    return (Array.isArray(v) && v.length) ? v : (DEFAULT_LISTS[key] || []);
+  };
 
   // ---------- state ----------
   const state = {
@@ -593,6 +599,8 @@
         SETTINGS.v = 3;
       }
     } catch (_) { /* tab/cell missing → defaults */ }
+    console.log("33&Me: settings loaded — lists:",
+      Object.fromEntries(["genre", "format", "condition"].map((k) => [k, listOf(k).length])));
     applySettings();
   }
 
@@ -607,6 +615,8 @@
       }).catch(() => {}); // may already exist
     }
     const cols = LIST_SPECS.map((s) => s.get() || []);
+    console.log("33&Me: syncing 33Lists →",
+      LIST_SPECS.map((s, i) => `${s.header}:${cols[i].length}`).join(", "));
     const rows = [LIST_SPECS.map((s) => s.header)];
     for (let i = 0; i < LIST_ROWS; i++) {
       rows.push(cols.map((c) => (c[i] == null ? "" : c[i]))); // pad so removed values are cleared
