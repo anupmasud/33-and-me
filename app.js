@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "17";
+  const APP_VERSION = "18";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -80,16 +80,18 @@
   const FIELD_DEFS = [
     { key: "artist", label: "Artist", req: true, mode: "both" },
     { key: "title", label: "Title", req: true, mode: "both" },
+    { key: "label", label: "Label", req: false, mode: "record" },
+    { key: "yearReleased", label: "Year Released", req: false, mode: "record" },
     { key: "genre", label: "Genre", req: false, mode: "both" },
     { key: "format", label: "Format", req: true, mode: "record" },
-    { key: "condition", label: "Condition", req: true, mode: "record" },
+    { key: "condition", label: "Condition", req: false, mode: "record" },
     { key: "location", label: "Where bought", req: true, mode: "record" },
     { key: "city", label: "City", req: false, mode: "record" },
     { key: "country", label: "Country", req: false, mode: "record" },
     { key: "price", label: "Price", req: true, mode: "record" },
-    { key: "currency", label: "Currency", req: true, mode: "record" },
+    { key: "currency", label: "Currency", req: false, mode: "record" },
     { key: "year", label: "Year Bought", req: false, mode: "record" },
-    { key: "date", label: "Date bought", req: true, mode: "record" },
+    { key: "date", label: "Date bought", req: false, mode: "record" },
     { key: "notes", label: "Notes", req: false, mode: "both" },
   ];
   const DATE_FORMATS = ["yyyy-mm-dd", "dd/mm/yyyy", "mm/dd/yyyy", "d mmm yyyy"];
@@ -98,7 +100,7 @@
     required: Object.fromEntries(FIELD_DEFS.map((f) => [f.key, f.req])),
     lists: { format: FORMAT_VALUES.slice(), condition: CONDITION_VALUES.slice(), genre: GENRE_VALUES.slice() },
     dateFormat: "yyyy-mm-dd",
-    currency: "EUR",
+    v: 2,
   });
   let SETTINGS = defaultSettings();
   const labelOf = (key) => (SETTINGS.labels && SETTINGS.labels[key]) || key;
@@ -252,8 +254,35 @@
 
     // ensure app columns exist on the collection header row
     const t = state.collectionSheet.title;
-    const head = await api("/values/" + q(`${t}!1:1`));
-    let headers = (head.values && head.values[0]) || [];
+    let headers = ((await api("/values/" + q(`${t}!1:1`))).values || [[]])[0] || [];
+
+    // Insert Label + Year Released right after the Title column if they're missing.
+    const titleIdx = headers.indexOf("Album Name") >= 0 ? headers.indexOf("Album Name") : headers.indexOf("Title");
+    const insertCols = ["Label", "Year Released"].filter((c) => !headers.includes(c));
+    if (insertCols.length && titleIdx >= 0) {
+      try {
+        await api(":batchUpdate", {
+          method: "POST",
+          body: JSON.stringify({
+            requests: [{
+              insertDimension: {
+                range: { sheetId: state.collectionSheet.sheetId, dimension: "COLUMNS", startIndex: titleIdx + 1, endIndex: titleIdx + 1 + insertCols.length },
+                inheritFromBefore: false,
+              },
+            }],
+          }),
+        });
+        const from = colLetter(titleIdx + 1), to = colLetter(titleIdx + insertCols.length);
+        await api("/values/" + q(`${t}!${from}1:${to}1`) + "?valueInputOption=USER_ENTERED", {
+          method: "PUT",
+          body: JSON.stringify({ values: [insertCols] }),
+        });
+        headers = ((await api("/values/" + q(`${t}!1:1`))).values || [[]])[0] || []; // re-read after insert
+      } catch (e) {
+        console.error("33&Me: couldn't insert Label/Year Released columns:", e);
+      }
+    }
+
     const missing = APP_COLUMNS.filter((h) => !headers.includes(h));
     if (missing.length) {
       headers = headers.concat(missing);
@@ -366,6 +395,8 @@
       row: i + 2, // 1-based + header
       artist: hv(r, "Artist"),
       title: hv(r, "Album Name") || hv(r, "Title"),
+      label: hv(r, "Label"),
+      yearReleased: hv(r, "Year Released"),
       genre: hv(r, "Genre"),
       location: hv(r, "Location"),
       city: hv(r, "City"),
@@ -415,8 +446,16 @@
             genre: Array.isArray(pl.genre) && pl.genre.length ? pl.genre : SETTINGS.lists.genre,
           },
           dateFormat: p.dateFormat || SETTINGS.dateFormat,
-          currency: p.currency || SETTINGS.currency,
+          v: p.v || 1,
         };
+        // Migration: settings saved before Currency/Date/Condition were made
+        // optional — flip them off once, then mark migrated.
+        if (SETTINGS.v < 2) {
+          SETTINGS.required.currency = false;
+          SETTINGS.required.date = false;
+          SETTINGS.required.condition = false;
+          SETTINGS.v = 2;
+        }
       }
     } catch (_) { /* tab/cell missing → defaults */ }
     applySettings();
@@ -437,11 +476,13 @@
   }
 
   // Push current settings into the form labels / required markers / dropdowns.
-  function setSelectOptions(sel, values) {
+  function setSelectOptions(sel, values, blankFirst) {
     if (!sel) return;
     const cur = sel.value;
-    sel.innerHTML = values.map((v) => `<option>${esc(v)}</option>`).join("");
-    if (values.includes(cur)) sel.value = cur;
+    const opts = (blankFirst ? [""] : []).concat(values);
+    sel.innerHTML = opts.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    if (opts.includes(cur)) sel.value = cur;
+    else if (blankFirst) sel.value = "";
   }
   function applySettings() {
     FIELD_DEFS.forEach((fd) => {
@@ -453,7 +494,7 @@
     const form = $("#add-form");
     if (form) {
       setSelectOptions(form.format, listOf("format"));
-      setSelectOptions(form.condition, listOf("condition"));
+      setSelectOptions(form.condition, listOf("condition"), true); // blank-first: no default
     }
   }
 
@@ -511,7 +552,8 @@
     const amt = parseFloat(String(amount == null ? "" : amount).replace(/[^0-9.\-]/g, ""));
     if (!isFinite(amt)) return null;
     const cur = String(currency || "").trim().toUpperCase();
-    if (!cur || cur === "USD") return amt;
+    if (!cur) return null;        // no currency entered → can't convert
+    if (cur === "USD") return amt;
     const r = await getRates();
     const rate = r.rates[cur];
     if (!rate) return null;
@@ -532,6 +574,7 @@
     const maxSN = state.collection.reduce((m) => m + 1, 1);
     put("SN", String(maxSN));
     put("Artist", f.artist); put("Album Name", f.title); put("Genre", f.genre);
+    put("Label", f.label); put("Year Released", f.yearReleased);
     put("Location", f.location); put("City", f.city); put("Country", f.country); put("Year", f.year);
     put("Date", f.date); put("Original Cost", f.price); put("Original Currency", f.currency);
     const usd = await toUSD(f.price, f.currency).catch(() => null);
@@ -586,6 +629,8 @@
       openSheet("record", {
         artist: g("Artist"),
         title: g("Album Name") || g("Title"),
+        label: g("Label"),
+        yearReleased: g("Year Released") === "" ? "" : String(g("Year Released")),
         genre: g("Genre"),
         location: g("Location"),
         city: g("City"),
@@ -608,7 +653,8 @@
   // Friendlier labels for a few columns in the read-only detail view.
   // Map a sheet column header to its configurable display label for the detail view.
   const FIELD_COLS = {
-    artist: "Artist", title: "Album Name", genre: "Genre", format: "Format",
+    artist: "Artist", title: "Album Name", label: "Label", yearReleased: "Year Released",
+    genre: "Genre", format: "Format",
     condition: "Condition", location: "Location", city: "City", country: "Country",
     price: "Original Cost", currency: "Original Currency", year: "Year", date: "Date", notes: "Notes",
   };
@@ -659,7 +705,6 @@
       </div>`).join("");
     $("#admin-dateformat").innerHTML = DATE_FORMATS
       .map((f) => `<option ${f === s.dateFormat ? "selected" : ""}>${f}</option>`).join("");
-    $("#admin-currency").value = s.currency;
     $("#admin-list-format").value = (s.lists.format || []).join("\n");
     $("#admin-list-condition").value = (s.lists.condition || []).join("\n");
     $("#admin-list-genre").value = (s.lists.genre || []).join("\n");
@@ -695,7 +740,6 @@
       genre: parseList("#admin-list-genre", SETTINGS.lists.genre),
     };
     SETTINGS.dateFormat = $("#admin-dateformat").value || "yyyy-mm-dd";
-    SETTINGS.currency = $("#admin-currency").value.trim() || "EUR";
     applySettings();
     setBusy(true);
     try {
@@ -721,6 +765,7 @@
     };
     set("Artist", f.artist);
     set("Album Name", f.title); set("Title", f.title); // whichever column the sheet uses
+    set("Label", f.label); set("Year Released", f.yearReleased);
     set("Genre", f.genre); set("Location", f.location); set("City", f.city); set("Country", f.country); set("Year", f.year);
     set("Date", f.date); set("Original Cost", f.price); set("Original Currency", f.currency);
     const usd = await toUSD(f.price, f.currency).catch(() => null);
@@ -1166,11 +1211,12 @@
     applyAddMode();
     const form = $("#add-form");
     form.reset();
-    form.date.value = todayISO();
-    form.currency.value = SETTINGS.currency; // configurable default (prefill overrides)
+    // No auto-defaults for date/currency/condition — they stay blank until entered.
     if (prefill) {
       form.artist.value = prefill.artist || "";
       form.title.value = prefill.title || "";
+      if (prefill.label !== undefined) form.label.value = prefill.label || "";
+      if (prefill.yearReleased !== undefined) form.yearReleased.value = prefill.yearReleased || "";
       form.genre.value = prefill.genre || "";
       // extended fields (used when editing an existing record)
       if (prefill.year !== undefined) form.year.value = prefill.year || "";
@@ -1369,6 +1415,7 @@
       const f = ev.target;
       const data = {
         artist: f.artist.value.trim(), title: f.title.value.trim(),
+        label: f.label.value.trim(), yearReleased: f.yearReleased.value.trim(),
         genre: f.genre.value.trim(), year: f.year.value.trim(),
         format: f.format.value, condition: f.condition.value,
         location: f.location.value.trim(), city: f.city.value.trim(),

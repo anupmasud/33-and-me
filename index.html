@@ -83,6 +83,10 @@
         <label><span data-fl="title"></span><span data-req="title" class="req-star req-record"> *</span><input name="title" autocomplete="off" /></label>
       </div>
       <div class="grid2 record-only">
+        <label><span data-fl="label"></span><span data-req="label" class="req-star"> *</span><input name="label" autocomplete="off" /></label>
+        <label><span data-fl="yearReleased"></span><span data-req="yearReleased" class="req-star"> *</span><input name="yearReleased" inputmode="numeric" autocomplete="off" /></label>
+      </div>
+      <div class="grid2 record-only">
         <label><span data-fl="format"></span><span data-req="format" class="req-star"> *</span>
           <select name="format">
             <option>LP</option><option>2xLP</option><option>EP</option>
@@ -104,7 +108,7 @@
         <datalist id="country-list"></datalist>
         <div class="grid2">
           <label><span data-fl="price"></span><span data-req="price" class="req-star"> *</span><input name="price" inputmode="decimal" autocomplete="off" /></label>
-          <label><span data-fl="currency"></span><span data-req="currency" class="req-star"> *</span><input name="currency" value="EUR" autocomplete="off" /></label>
+          <label><span data-fl="currency"></span><span data-req="currency" class="req-star"> *</span><input name="currency" autocomplete="off" /></label>
         </div>
         <label>Cost (USD) <span class="field-hint">— auto-converted at today's rate</span>
           <input name="costusd" readonly tabindex="-1" placeholder="—" />
@@ -162,10 +166,7 @@
       Saved to a hidden tab in your sheet, so they apply on every device.</p>
     <div class="admin-head"><span>Field label</span><span>Required</span></div>
     <div id="admin-fields" class="admin-fields"></div>
-    <div class="grid2">
-      <label>Date format<select id="admin-dateformat"></select></label>
-      <label>Default currency<input id="admin-currency" autocomplete="off" /></label>
-    </div>
+    <label>Date format<select id="admin-dateformat"></select></label>
     <h3 class="admin-subhead">Dropdown values <span class="field-hint">— one per line</span></h3>
     <div class="grid2">
       <label>Format<textarea id="admin-list-format" rows="5"></textarea></label>
