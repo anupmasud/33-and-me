@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "19";
+  const APP_VERSION = "20";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -88,8 +88,8 @@
     { key: "location", label: "Where bought", req: true, mode: "record" },
     { key: "city", label: "City", req: false, mode: "record" },
     { key: "country", label: "Country", req: false, mode: "record" },
-    { key: "price", label: "Price", req: true, mode: "record" },
-    { key: "currency", label: "Currency", req: false, mode: "record" },
+    { key: "price", label: "Amount Paid", req: true, mode: "record" },
+    { key: "currency", label: "Paid In", req: false, mode: "record" },
     { key: "year", label: "Year Bought", req: false, mode: "record" },
     { key: "date", label: "Date bought", req: false, mode: "record" },
     { key: "notes", label: "Notes", req: false, mode: "both" },
@@ -101,7 +101,7 @@
     lists: { format: FORMAT_VALUES.slice(), condition: CONDITION_VALUES.slice(), genre: GENRE_VALUES.slice() },
     dateFormat: "yyyy-mm-dd",
     preferredCurrency: "USD",
-    v: 2,
+    v: 3,
   });
   let SETTINGS = defaultSettings();
   const prefCurrency = () => (SETTINGS.preferredCurrency || "USD").toUpperCase();
@@ -285,15 +285,19 @@
       }
     }
 
-    // Rename legacy "Cost (USD)" → "Cost", and add "Cost (Preferred)" beside it.
+    // Rename legacy headers to the current names, and add "Cost (Preferred)".
     try {
-      if (!headers.includes("Cost") && headers.includes("Cost (USD)")) {
-        const ci = headers.indexOf("Cost (USD)");
-        await api("/values/" + q(`${t}!${colLetter(ci)}1`) + "?valueInputOption=USER_ENTERED", {
-          method: "PUT", body: JSON.stringify({ values: [["Cost"]] }),
+      const renameHeader = async (from, to) => {
+        if (headers.includes(to) || !headers.includes(from)) return;
+        const i = headers.indexOf(from);
+        await api("/values/" + q(`${t}!${colLetter(i)}1`) + "?valueInputOption=USER_ENTERED", {
+          method: "PUT", body: JSON.stringify({ values: [[to]] }),
         });
-        headers[ci] = "Cost";
-      }
+        headers[i] = to;
+      };
+      await renameHeader("Cost (USD)", "Cost");
+      await renameHeader("Original Cost", "Amount Paid");
+      await renameHeader("Original Currency", "Paid In");
       const costIdx = headers.indexOf("Cost");
       if (costIdx >= 0 && !headers.includes("Cost (Preferred)")) {
         await api(":batchUpdate", {
@@ -488,8 +492,12 @@
           SETTINGS.required.currency = false;
           SETTINGS.required.date = false;
           SETTINGS.required.condition = false;
-          SETTINGS.v = 2;
         }
+        if (SETTINGS.v < 3) {
+          SETTINGS.labels.price = "Amount Paid";
+          SETTINGS.labels.currency = "Paid In";
+        }
+        SETTINGS.v = 3;
       }
     } catch (_) { /* tab/cell missing → defaults */ }
     applySettings();
@@ -621,7 +629,9 @@
     put("Artist", f.artist); put("Album Name", f.title); put("Genre", f.genre);
     put("Label", f.label); put("Year Released", f.yearReleased);
     put("Location", f.location); put("City", f.city); put("Country", f.country); put("Year", f.year);
-    put("Date", f.date); put("Original Cost", f.price); put("Original Currency", f.currency);
+    put("Date", f.date);
+    put("Amount Paid", f.price); put("Original Cost", f.price);
+    put("Paid In", f.currency); put("Original Currency", f.currency);
     const usd = await toUSD(f.price, f.currency).catch(() => null);
     if (usd != null) { put("Cost", usd.toFixed(2)); put("Cost (USD)", usd.toFixed(2)); }
     const pref = await convert(f.price, f.currency, prefCurrency()).catch(() => null);
@@ -685,8 +695,8 @@
         year: g("Year") === "" ? "" : String(g("Year")),
         format: g("Format"),
         condition: g("Condition"),
-        price: g("Original Cost") === "" ? "" : String(g("Original Cost")),
-        currency: g("Original Currency"),
+        price: String(g("Amount Paid") || g("Original Cost") || ""),
+        currency: g("Paid In") || g("Original Currency"),
         costusd: String(g("Cost") || g("Cost (USD)") || ""),
         costpref: String(g("Cost (Preferred)") || ""),
         date: toISODate(g("Date")),
@@ -704,7 +714,7 @@
     artist: "Artist", title: "Album Name", label: "Label", yearReleased: "Year Released",
     genre: "Genre", format: "Format",
     condition: "Condition", location: "Location", city: "City", country: "Country",
-    price: "Original Cost", currency: "Original Currency", year: "Year", date: "Date", notes: "Notes",
+    price: "Amount Paid", currency: "Paid In", year: "Year", date: "Date", notes: "Notes",
   };
   function columnLabel(header) {
     if (header === "Cost" || header === "Cost (USD)") return "Cost";
@@ -819,7 +829,9 @@
     set("Album Name", f.title); set("Title", f.title); // whichever column the sheet uses
     set("Label", f.label); set("Year Released", f.yearReleased);
     set("Genre", f.genre); set("Location", f.location); set("City", f.city); set("Country", f.country); set("Year", f.year);
-    set("Date", f.date); set("Original Cost", f.price); set("Original Currency", f.currency);
+    set("Date", f.date);
+    set("Amount Paid", f.price); set("Original Cost", f.price);
+    set("Paid In", f.currency); set("Original Currency", f.currency);
     const usd = await toUSD(f.price, f.currency).catch(() => null);
     if (usd != null) { set("Cost", usd.toFixed(2)); set("Cost (USD)", usd.toFixed(2)); }
     const pref = await convert(f.price, f.currency, prefCurrency()).catch(() => null);
