@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "20";
+  const APP_VERSION = "21";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -285,39 +285,71 @@
       }
     }
 
-    // Rename legacy headers to the current names, and add "Cost (Preferred)".
+    // Rename legacy headers, then consolidate down to ONE cost column named for
+    // the preferred currency, e.g. "Cost (USD)".
     try {
+      const sid = state.collectionSheet.sheetId;
+      const reread = async () => { headers = ((await api("/values/" + q(`${t}!1:1`))).values || [[]])[0] || []; };
+      const renameAt = async (i, name) => {
+        await api("/values/" + q(`${t}!${colLetter(i)}1`) + "?valueInputOption=USER_ENTERED", {
+          method: "PUT", body: JSON.stringify({ values: [[name]] }),
+        });
+        headers[i] = name;
+      };
       const renameHeader = async (from, to) => {
         if (headers.includes(to) || !headers.includes(from)) return;
-        const i = headers.indexOf(from);
-        await api("/values/" + q(`${t}!${colLetter(i)}1`) + "?valueInputOption=USER_ENTERED", {
-          method: "PUT", body: JSON.stringify({ values: [[to]] }),
-        });
-        headers[i] = to;
+        await renameAt(headers.indexOf(from), to);
       };
-      await renameHeader("Cost (USD)", "Cost");
       await renameHeader("Original Cost", "Amount Paid");
       await renameHeader("Original Currency", "Paid In");
-      const costIdx = headers.indexOf("Cost");
-      if (costIdx >= 0 && !headers.includes("Cost (Preferred)")) {
-        await api(":batchUpdate", {
-          method: "POST",
-          body: JSON.stringify({
-            requests: [{
-              insertDimension: {
-                range: { sheetId: state.collectionSheet.sheetId, dimension: "COLUMNS", startIndex: costIdx + 1, endIndex: costIdx + 2 },
-                inheritFromBefore: false,
-              },
-            }],
-          }),
-        });
-        await api("/values/" + q(`${t}!${colLetter(costIdx + 1)}1`) + "?valueInputOption=USER_ENTERED", {
-          method: "PUT", body: JSON.stringify({ values: [["Cost (Preferred)"]] }),
-        });
-        headers = ((await api("/values/" + q(`${t}!1:1`))).values || [[]])[0] || [];
+
+      const target = costColName();
+      const ci = headers.indexOf("Cost");                   // legacy USD column
+      const pi = headers.indexOf("Cost (Preferred)");
+      const xi = headers.findIndex((h) => h !== "Cost (Preferred)" && /^Cost \(/.test(h));
+
+      if (pi >= 0) {
+        // Fold "Cost" into "Cost (Preferred)", rename it, then drop "Cost".
+        if (ci >= 0) {
+          const src = colLetter(ci), dst = colLetter(pi);
+          const vals = ((await api("/values/" + q(`${t}!${src}2:${src}`))).values) || [];
+          if (vals.length) {
+            await api("/values/" + q(`${t}!${dst}2:${dst}${vals.length + 1}`) + "?valueInputOption=RAW", {
+              method: "PUT", body: JSON.stringify({ values: vals }),
+            });
+          }
+        }
+        await renameAt(pi, target);
+        if (ci >= 0) {
+          await api(":batchUpdate", {
+            method: "POST",
+            body: JSON.stringify({
+              requests: [{ deleteDimension: { range: { sheetId: sid, dimension: "COLUMNS", startIndex: ci, endIndex: ci + 1 } } }],
+            }),
+          });
+        }
+        await reread();
+      } else if (xi >= 0 && headers[xi] !== target) {
+        await renameAt(xi, target);       // preferred currency changed
+      } else if (xi < 0 && ci >= 0) {
+        await renameAt(ci, target);       // only a plain "Cost" column
+      } else if (xi < 0 && ci < 0) {
+        const pIdx = headers.indexOf("Paid In");
+        if (pIdx >= 0) {
+          await api(":batchUpdate", {
+            method: "POST",
+            body: JSON.stringify({
+              requests: [{ insertDimension: { range: { sheetId: sid, dimension: "COLUMNS", startIndex: pIdx + 1, endIndex: pIdx + 2 }, inheritFromBefore: false } }],
+            }),
+          });
+          await api("/values/" + q(`${t}!${colLetter(pIdx + 1)}1`) + "?valueInputOption=USER_ENTERED", {
+            method: "PUT", body: JSON.stringify({ values: [[target]] }),
+          });
+          await reread();
+        }
       }
     } catch (e) {
-      console.error("33&Me: couldn't set up Cost / Cost (Preferred) columns:", e);
+      console.error("33&Me: cost column setup failed:", e);
     }
 
     const missing = APP_COLUMNS.filter((h) => !headers.includes(h));
@@ -538,8 +570,8 @@
       setSelectOptions(form.format, listOf("format"));
       setSelectOptions(form.condition, listOf("condition"), true); // blank-first: no default
     }
-    const cpl = $("#costpref-label");
-    if (cpl) cpl.textContent = "Cost (" + prefCurrency() + ")";
+    const cl = $("#cost-label");
+    if (cl) cl.textContent = costColName();
   }
 
   // First required field (record mode) left empty → its label, else null.
@@ -591,33 +623,57 @@
     try { localStorage.setItem("rates33", JSON.stringify(RATES)); } catch (_) {}
     return RATES;
   }
-  // Convert `amount` from one currency to another; number or null.
-  async function convert(amount, fromCur, toCur) {
+  // Historical rate for a specific date (ECB data, ~30 major currencies, back to
+  // 1999). Returns the multiplier from→to, or null if unavailable for that date.
+  const histCache = new Map();
+  async function historicalRate(from, to, dateISO) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO || "")) return null;
+    const key = `${from}|${to}|${dateISO}`;
+    if (histCache.has(key)) return histCache.get(key);
+    let rate = null;
+    try {
+      const resp = await fetch(`https://api.frankfurter.dev/v1/${dateISO}?from=${from}&to=${to}`);
+      const d = await resp.json();
+      if (d && d.rates && typeof d.rates[to] === "number") rate = d.rates[to];
+    } catch (_) { /* fall back to current */ }
+    histCache.set(key, rate);
+    return rate;
+  }
+
+  // Convert `amount` from one currency to another. Uses the rate as of `dateISO`
+  // (the purchase date) when available, otherwise today's rate. Number or null.
+  async function convert(amount, fromCur, toCur, dateISO) {
     const amt = parseFloat(String(amount == null ? "" : amount).replace(/[^0-9.\-]/g, ""));
     if (!isFinite(amt)) return null;
     const from = String(fromCur || "").trim().toUpperCase();
     const to = String(toCur || "USD").trim().toUpperCase();
     if (!from) return null;       // no source currency → can't convert
     if (from === to) return amt;
+    if (dateISO) {
+      const hr = await historicalRate(from, to, dateISO);
+      if (hr != null) return amt * hr;
+    }
     const r = await getRates();   // rates[X] = units of X per 1 USD
     const rFrom = from === "USD" ? 1 : r.rates[from];
     const rTo = to === "USD" ? 1 : r.rates[to];
     if (!rFrom || !rTo) return null;
     return (amt / rFrom) * rTo;
   }
-  const toUSD = (amount, currency) => convert(amount, currency, "USD");
 
-  // Refresh the read-only Cost (USD) and Cost (preferred) fields.
-  async function updateCosts() {
+  // The single cost column, named for the preferred currency, e.g. "Cost (INR)".
+  const costColName = () => `Cost (${prefCurrency()})`;
+
+  // Refresh the read-only cost field from Amount Paid / Paid In / Date bought.
+  // Rate lookups race (a historical fetch can outlast a cached one), so only the
+  // most recent call is allowed to write the field.
+  let costSeq = 0;
+  async function updateCost() {
     const f = $("#add-form");
-    if (f.costusd) {
-      const u = await convert(f.price.value, f.currency.value, "USD").catch(() => null);
-      f.costusd.value = u == null ? "" : u.toFixed(2);
-    }
-    if (f.costpref) {
-      const p = await convert(f.price.value, f.currency.value, prefCurrency()).catch(() => null);
-      f.costpref.value = p == null ? "" : p.toFixed(2);
-    }
+    if (!f.cost) return;
+    const seq = ++costSeq;
+    const c = await convert(f.price.value, f.currency.value, prefCurrency(), f.date.value).catch(() => null);
+    if (seq !== costSeq) return; // superseded by a newer edit
+    f.cost.value = c == null ? "" : c.toFixed(2);
   }
 
   async function addRecord(f) {
@@ -632,10 +688,8 @@
     put("Date", f.date);
     put("Amount Paid", f.price); put("Original Cost", f.price);
     put("Paid In", f.currency); put("Original Currency", f.currency);
-    const usd = await toUSD(f.price, f.currency).catch(() => null);
-    if (usd != null) { put("Cost", usd.toFixed(2)); put("Cost (USD)", usd.toFixed(2)); }
-    const pref = await convert(f.price, f.currency, prefCurrency()).catch(() => null);
-    if (pref != null) put("Cost (Preferred)", pref.toFixed(2));
+    const cost = await convert(f.price, f.currency, prefCurrency(), f.date).catch(() => null);
+    if (cost != null) put(costColName(), cost.toFixed(2));
     put("Format", f.format); put("Condition", f.condition); put("Notes", f.notes);
     put("Listen Count", "0");
 
@@ -697,8 +751,7 @@
         condition: g("Condition"),
         price: String(g("Amount Paid") || g("Original Cost") || ""),
         currency: g("Paid In") || g("Original Currency"),
-        costusd: String(g("Cost") || g("Cost (USD)") || ""),
-        costpref: String(g("Cost (Preferred)") || ""),
+        cost: String(g(costColName()) || ""),
         date: toISODate(g("Date")),
         notes: g("Notes"),
       }, item.row);
@@ -717,8 +770,7 @@
     price: "Amount Paid", currency: "Paid In", year: "Year", date: "Date", notes: "Notes",
   };
   function columnLabel(header) {
-    if (header === "Cost" || header === "Cost (USD)") return "Cost";
-    if (header === "Cost (Preferred)") return "Cost (" + prefCurrency() + ")";
+    if (header === "Cost" || header === "Cost (Preferred)") return costColName();
     for (const [key, col] of Object.entries(FIELD_COLS)) {
       if (col === header) return labelOf(key);
     }
@@ -785,6 +837,7 @@
   async function saveAdmin() {
     const prevDateFormat = SETTINGS.dateFormat;
     const prevLists = JSON.stringify(SETTINGS.lists);
+    const prevPref = prefCurrency();
     FIELD_DEFS.forEach((fd) => {
       const lin = document.querySelector(`.admin-label[data-akey="${fd.key}"]`);
       const cb = document.querySelector(`[data-areq="${fd.key}"]`);
@@ -810,8 +863,14 @@
       if (SETTINGS.dateFormat !== prevDateFormat || JSON.stringify(SETTINGS.lists) !== prevLists) {
         await fixValidation().catch(() => {});
       }
-      toast("Settings saved ✓");
       closeAdmin();
+      if (prefCurrency() !== prevPref) {
+        // Rename the cost column to the new currency, then prompt to recompute.
+        await showApp();
+        toast(`Cost column is now ${costColName()} — use “Recompute costs” to update existing rows`, 6000);
+      } else {
+        toast("Settings saved ✓");
+      }
     } catch (e) {
       toast("Couldn't save settings — are you online?");
     } finally { setBusy(false); }
@@ -832,10 +891,8 @@
     set("Date", f.date);
     set("Amount Paid", f.price); set("Original Cost", f.price);
     set("Paid In", f.currency); set("Original Currency", f.currency);
-    const usd = await toUSD(f.price, f.currency).catch(() => null);
-    if (usd != null) { set("Cost", usd.toFixed(2)); set("Cost (USD)", usd.toFixed(2)); }
-    const pref = await convert(f.price, f.currency, prefCurrency()).catch(() => null);
-    if (pref != null) set("Cost (Preferred)", pref.toFixed(2));
+    const cost = await convert(f.price, f.currency, prefCurrency(), f.date).catch(() => null);
+    if (cost != null) set(costColName(), cost.toFixed(2));
     set("Format", f.format); set("Condition", f.condition); set("Notes", f.notes);
     // Listen Count / Last Listened / SN are intentionally left untouched.
 
@@ -1188,6 +1245,43 @@
     } finally { setBusy(false); }
   }
 
+  // Recompute every row's cost from Amount Paid + Paid In into the preferred
+  // currency, using each record's purchase-date rate where available.
+  async function recomputeCosts() {
+    const t = state.collectionSheet.title;
+    const target = costColName();
+    const ci = state.col[target], pIdx = state.col["Amount Paid"], cIdx = state.col["Paid In"];
+    const dIdx = state.col["Date"];
+    if (ci === undefined || pIdx === undefined || cIdx === undefined) {
+      return toast(`Need Amount Paid / Paid In / ${target} columns`);
+    }
+    if (!confirm(`Recompute every cost into "${target}" from Amount Paid + Paid In, using each purchase-date's rate? This can take a minute.`)) return;
+    setBusy(true);
+    try {
+      const rows = ((await api("/values/" + q(t) + "?valueRenderOption=UNFORMATTED_VALUE")).values || []).slice(1);
+      const data = [];
+      let skipped = 0;
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i] || [];
+        const amt = r[pIdx], cur = r[cIdx];
+        if (amt == null || amt === "" || !cur) { skipped++; continue; }
+        const v = await convert(amt, cur, prefCurrency(), dIdx === undefined ? "" : toISODate(r[dIdx])).catch(() => null);
+        if (v == null) { skipped++; continue; }
+        data.push({ range: `${t}!${colLetter(ci)}${i + 2}`, values: [[v.toFixed(2)]] });
+      }
+      if (!data.length) return toast("Nothing to recompute");
+      await api("/values:batchUpdate", {
+        method: "POST",
+        body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+      });
+      await loadData(); render();
+      toast(`Recomputed ${data.length} costs ✓` + (skipped ? ` (${skipped} skipped)` : ""));
+    } catch (e) {
+      console.error("33&Me: recompute costs failed:", e);
+      toast("Couldn't recompute costs — are you online?");
+    } finally { setBusy(false); }
+  }
+
   // ---------- search & render ----------
   function matches(item, terms) {
     const hay = norm(item.artist + " " + item.title + " " + item.genre);
@@ -1293,8 +1387,7 @@
       if (prefill.country !== undefined) form.country.value = prefill.country || "";
       if (prefill.price !== undefined) form.price.value = prefill.price || "";
       if (prefill.currency) form.currency.value = prefill.currency;
-      if (form.costusd) form.costusd.value = prefill.costusd || "";
-      if (form.costpref) form.costpref.value = prefill.costpref || "";
+      if (form.cost) form.cost.value = prefill.cost || "";
       if (prefill.date) form.date.value = prefill.date;
       if (prefill.notes !== undefined) form.notes.value = prefill.notes || "";
     }
@@ -1459,6 +1552,7 @@
     $("#admin-close").addEventListener("click", closeAdmin);
     $("#admin-save").addEventListener("click", saveAdmin);
     $("#admin-reset").addEventListener("click", () => renderAdmin(defaultSettings()));
+    $("#admin-recompute").addEventListener("click", () => { closeAdmin(); recomputeCosts(); });
     $("#sheet-backdrop").addEventListener("click", () => {
       closeSheet();
       closeDetail();
@@ -1474,8 +1568,9 @@
       }));
     $("#add-form").artist.addEventListener("input", checkDup);
     $("#add-form").title.addEventListener("input", checkDup);
-    $("#add-form").price.addEventListener("input", updateCosts);
-    $("#add-form").currency.addEventListener("input", updateCosts);
+    $("#add-form").price.addEventListener("input", updateCost);
+    $("#add-form").currency.addEventListener("input", updateCost);
+    $("#add-form").date.addEventListener("change", updateCost); // purchase date drives the rate
 
     $("#add-form").addEventListener("submit", (ev) => {
       ev.preventDefault();
