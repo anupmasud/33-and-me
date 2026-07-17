@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "30";
+  const APP_VERSION = "31";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -119,6 +119,7 @@
     preferredCurrency: "USD",
     collectionTab: "",   // "" = first non-app tab
     wishlistTab: "",     // "" = "Wishlist" (created if absent)
+    map: {},             // app field key -> the user's actual column header
     hidden: {},          // field key -> true means exclude from form + detail
     defaults: {},        // field key -> value prefilled when adding
     wish: { artist: true, title: true, genre: true, notes: true }, // fields on the wishlist
@@ -137,7 +138,12 @@
   const hiddenOf = (key) => !CORE_FIELDS.includes(key) && !!(SETTINGS.hidden && SETTINGS.hidden[key]);
   const defaultOf = (key) => (SETTINGS.defaults && SETTINGS.defaults[key]) || "";
   const onWish = (key) => !!(SETTINGS.wish && SETTINGS.wish[key]);
-  const wishColName = (key) => WISH_COL[key] || FIELD_COLS[key] || key;
+  // Column resolution: a user's mapping wins; otherwise the app's own header.
+  // Empty map ⇒ identity ⇒ existing sheets behave exactly as before.
+  const mapped = (key) => (SETTINGS.map && SETTINGS.map[key]) || "";
+  const colName = (key) => mapped(key) || FIELD_COLS[key] || key;                 // collection tab
+  const wishColName = (key) => mapped(key) || WISH_COL[key] || FIELD_COLS[key] || key; // wishlist tab
+  const isMapped = () => SETTINGS.map && Object.keys(SETTINGS.map).length > 0;
   // Never hand back an empty list: an empty/missing saved list would silently
   // wipe the sheet's dropdown, so fall back to the built-in defaults.
   const listOf = (key) => {
@@ -311,8 +317,9 @@
         if (onWish(fd.key) && !wh.includes(wishColName(fd.key))) need.push(wishColName(fd.key));
       });
       if (!wh.includes("Added")) need.push("Added");
-      if (need.length || !wh.length) {
-        wh = wh.concat(need);
+      // With a mapping, use the user's wishlist columns as-is (don't append).
+      if ((need.length && !isMapped()) || !wh.length) {
+        wh = wh.concat(isMapped() ? [] : need);
         await api("/values/" + q(`${wt}!1:1`) + "?valueInputOption=USER_ENTERED", {
           method: "PUT", body: JSON.stringify({ values: [wh] }),
         });
@@ -326,6 +333,9 @@
     const t = state.collectionSheet.title;
     let headers = ((await api("/values/" + q(`${t}!1:1`))).values || [[]])[0] || [];
 
+    // When the user has mapped their own columns, don't impose the app's schema
+    // (renames/inserts/added columns) — just use their file as-is.
+    if (!isMapped()) {
     // Insert Label + Year Released right after the Title column if they're missing.
     const titleIdx = headers.indexOf("Album Name") >= 0 ? headers.indexOf("Album Name") : headers.indexOf("Title");
     const insertCols = ["Label", "Year Released"].filter((c) => !headers.includes(c));
@@ -428,6 +438,7 @@
         body: JSON.stringify({ values: [headers] }),
       });
     }
+    } // end !isMapped()
     state.headers = headers;
     state.col = {};
     headers.forEach((h, i) => { state.col[h] = i; });
@@ -601,24 +612,17 @@
     );
     const [colRange, wishRange] = data.valueRanges;
 
+    // Read collection columns by field key through the mapping (colName).
+    const cv = (r, key) => { const idx = state.col[colName(key)]; return idx === undefined ? "" : (r[idx] || ""); };
     const rows = (colRange.values || []).slice(1);
-    state.collection = rows.map((r, i) => ({
-      row: i + 2, // 1-based + header
-      artist: hv(r, "Artist"),
-      title: hv(r, "Album Name") || hv(r, "Title"),
-      label: hv(r, "Label"),
-      yearReleased: hv(r, "Year Released"),
-      genre: hv(r, "Genre"),
-      location: hv(r, "Location"),
-      city: hv(r, "City"),
-      country: hv(r, "Country"),
-      year: hv(r, "Year"),
-      format: hv(r, "Format"),
-      condition: hv(r, "Condition"),
-      listens: parseInt(hv(r, "Listen Count"), 10) || 0,
-      lastListened: hv(r, "Last Listened"),
-      notes: hv(r, "Notes"),
-    })).filter((x) => x.artist || x.title);
+    state.collection = rows.map((r, i) => {
+      const item = { row: i + 2 };
+      FIELD_DEFS.forEach((fd) => { item[fd.key] = cv(r, fd.key); });
+      if (!item.title && !mapped("title")) item.title = hv(r, "Title"); // legacy fallback
+      item.listens = parseInt(hv(r, "Listen Count"), 10) || 0; // app-managed columns
+      item.lastListened = hv(r, "Last Listened");
+      return item;
+    }).filter((x) => x.artist || x.title);
 
     // Wishlist is header-driven now (columns come from wish-enabled fields).
     const wcol = state.wishCol || {};
@@ -675,6 +679,7 @@
           preferredCurrency: (p.preferredCurrency || SETTINGS.preferredCurrency).toUpperCase(),
           collectionTab: p.collectionTab || "",
           wishlistTab: p.wishlistTab || "",
+          map: { ...(p.map || {}) },
           v: p.v || 1,
         };
         // Migration: settings saved before Currency/Date/Condition were made
@@ -887,15 +892,13 @@
     const put = (name, val) => { if (state.col[name] !== undefined) row[state.col[name]] = val; };
     const maxSN = state.collection.reduce((m) => m + 1, 1);
     put("SN", String(maxSN));
-    put("Artist", f.artist); put("Album Name", f.title); put("Genre", f.genre);
-    put("Label", f.label); put("Year Released", f.yearReleased);
-    put("Location", f.location); put("City", f.city); put("Country", f.country); put("Year", f.year);
-    put("Date", f.date);
-    put("Amount Paid", f.price); put("Original Cost", f.price);
-    put("Paid In", f.currency); put("Original Currency", f.currency);
+    const putf = (key, val) => put(colName(key), val);
+    FIELD_DEFS.forEach((fd) => putf(fd.key, f[fd.key]));
+    if (!mapped("title")) put("Title", f.title);            // legacy column names
+    if (!mapped("price")) put("Original Cost", f.price);
+    if (!mapped("currency")) put("Original Currency", f.currency);
     const cost = await convert(f.price, f.currency, prefCurrency(), f.date).catch(() => null);
     if (cost != null) put(costColName(), cost.toFixed(2));
-    put("Format", f.format); put("Condition", f.condition); put("Notes", f.notes);
     put("Listen Count", "0");
 
     const t = state.collectionSheet.title;
@@ -943,23 +946,24 @@
       );
       const vals = (resp.values && resp.values[0]) || [];
       const g = (name) => { const i = state.col[name]; return i === undefined ? "" : (vals[i] == null ? "" : vals[i]); };
+      const gf = (key) => g(colName(key)); // read a field by its mapped column
       openSheet("record", {
-        artist: g("Artist"),
-        title: g("Album Name") || g("Title"),
-        label: g("Label"),
-        yearReleased: g("Year Released") === "" ? "" : String(g("Year Released")),
-        genre: g("Genre"),
-        location: g("Location"),
-        city: g("City"),
-        country: g("Country"),
-        year: g("Year") === "" ? "" : String(g("Year")),
-        format: g("Format"),
-        condition: g("Condition"),
-        price: String(g("Amount Paid") || g("Original Cost") || ""),
-        currency: g("Paid In") || g("Original Currency"),
+        artist: gf("artist"),
+        title: gf("title") || g("Title"),
+        label: gf("label"),
+        yearReleased: gf("yearReleased") === "" ? "" : String(gf("yearReleased")),
+        genre: gf("genre"),
+        location: gf("location"),
+        city: gf("city"),
+        country: gf("country"),
+        year: gf("year") === "" ? "" : String(gf("year")),
+        format: gf("format"),
+        condition: gf("condition"),
+        price: String(gf("price") || g("Original Cost") || ""),
+        currency: gf("currency") || g("Original Currency"),
         cost: String(g(costColName()) || ""),
-        date: toISODate(g("Date")),
-        notes: g("Notes"),
+        date: toISODate(gf("date")),
+        notes: gf("notes"),
       }, item.row);
       state.editItem = item; // set after openSheet (which clears it)
     } catch (e) {
@@ -1145,16 +1149,13 @@
       if (idx === undefined) return;
       data.push({ range: `${t}!${colLetter(idx)}${row}`, values: [[val]] });
     };
-    set("Artist", f.artist);
-    set("Album Name", f.title); set("Title", f.title); // whichever column the sheet uses
-    set("Label", f.label); set("Year Released", f.yearReleased);
-    set("Genre", f.genre); set("Location", f.location); set("City", f.city); set("Country", f.country); set("Year", f.year);
-    set("Date", f.date);
-    set("Amount Paid", f.price); set("Original Cost", f.price);
-    set("Paid In", f.currency); set("Original Currency", f.currency);
+    const setf = (key, val) => set(colName(key), val);
+    FIELD_DEFS.forEach((fd) => setf(fd.key, f[fd.key]));
+    if (!mapped("title")) set("Title", f.title);            // legacy column names
+    if (!mapped("price")) set("Original Cost", f.price);
+    if (!mapped("currency")) set("Original Currency", f.currency);
     const cost = await convert(f.price, f.currency, prefCurrency(), f.date).catch(() => null);
     if (cost != null) set(costColName(), cost.toFixed(2));
-    set("Format", f.format); set("Condition", f.condition); set("Notes", f.notes);
     // Listen Count / Last Listened / SN are intentionally left untouched.
 
     setBusy(true);
@@ -1950,6 +1951,7 @@
         `<option value="${NEW_WISHLIST}" ${curWish ? "" : "selected"}>— create a “Wishlist” tab —</option>`;
       $("#sheet-tabs").classList.remove("hidden");
       err.classList.add("hidden");
+      await loadMapFields(id);
       return true;
     } catch (e) {
       $("#sheet-tabs").classList.add("hidden");
@@ -1959,10 +1961,47 @@
     }
   }
 
+  // Read a tab's header row directly (the sheet may not be the active one).
+  async function fetchHeader(sheetId, tab) {
+    const token = await getToken(false).catch(() => getToken(true));
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(`'${tab}'!1:1`)}`,
+      { headers: { Authorization: "Bearer " + token } }
+    );
+    if (!res.ok) return [];
+    const d = await res.json();
+    return (d.values && d.values[0]) || [];
+  }
+
+  function renderMapFields(columns) {
+    const wants = (key) => [FIELD_COLS[key], WISH_COL[key], labelOf(key)].filter(Boolean).map(norm);
+    const auto = (key) => {
+      const w = wants(key);
+      return columns.find((c) => w.includes(norm(c))) || "";
+    };
+    $("#setup-map-fields").innerHTML = FIELD_DEFS.map((fd) => {
+      const cur = (SETTINGS.map && SETTINGS.map[fd.key]) || auto(fd.key);
+      const req = CORE_FIELDS.includes(fd.key);
+      const opts = `<option value="">${req ? "— required —" : "(not in my file)"}</option>` +
+        columns.map((c) => `<option value="${esc(c)}" ${sameName(c, cur) ? "selected" : ""}>${esc(c)}</option>`).join("");
+      return `<label class="setup-map-row"><span>${esc(labelOf(fd.key))}${req ? ' <span class="req-star">*</span>' : ""}</span>
+        <select data-map="${fd.key}">${opts}</select></label>`;
+    }).join("");
+    $("#setup-map").classList.remove("hidden");
+  }
+
+  async function loadMapFields(id) {
+    const tab = $("#setup-collection").value;
+    if (!tab) { $("#setup-map").classList.add("hidden"); return; }
+    const cols = await fetchHeader(id, tab).catch(() => []);
+    renderMapFields(cols);
+  }
+
   function openSheetModal(firstRun) {
     const form = $("#sheet-form");
     $("#sheet-error").classList.add("hidden");
     $("#sheet-tabs").classList.add("hidden");
+    $("#setup-map").classList.add("hidden");
     form.sheeturl.value = state.sheetId ? sheetUrl(state.sheetId) : "";
     // On mandatory first run (no sheet yet) there's nothing to cancel back to.
     $("#sheet-cancel").classList.toggle("hidden", !!firstRun && !state.sheetId);
@@ -1989,9 +2028,22 @@
     }
     const tabsShown = !$("#sheet-tabs").classList.contains("hidden");
     if (tabsShown) {
+      // Collect the field → column mapping.
+      const map = {};
+      document.querySelectorAll("#setup-map-fields [data-map]").forEach((sel) => {
+        if (sel.value) map[sel.dataset.map] = sel.value;
+      });
+      const mapShown = !$("#setup-map").classList.contains("hidden");
+      if (mapShown && (!map.artist || !map.title)) {
+        const err = $("#sheet-error");
+        err.textContent = "Map both Artist and Album Name — the app needs them.";
+        err.classList.remove("hidden");
+        return; // keep the modal open
+      }
       const wish = $("#setup-wishlist").value;
       SETTINGS.collectionTab = $("#setup-collection").value || "";
       SETTINGS.wishlistTab = wish === NEW_WISHLIST ? "" : wish;
+      if (mapShown) SETTINGS.map = map;
     }
     closeSheetModal();
     setBusy(true);
@@ -2062,6 +2114,10 @@
     $("#sheet-loadtabs").addEventListener("click", async () => {
       const id = setupSheetId();
       if (id) await loadSetupTabs(id);
+    });
+    $("#setup-collection").addEventListener("change", () => {
+      const id = parseSheetId($("#sheet-form").sheeturl.value);
+      if (id) loadMapFields(id); // re-map when the collection tab changes
     });
     $("#sheet-form").addEventListener("submit", (ev) => {
       ev.preventDefault();

@@ -158,6 +158,10 @@ button { font-family: inherit; }
 .field-hint { color: var(--sleeve-dim); font-weight: 400; font-size: 12px; }
 .form input[readonly] { opacity: .65; cursor: default; }
 .field-hidden { display: none !important; }
+.setup-map-fields { max-height: 42vh; overflow-y: auto; }
+.setup-map-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.setup-map-row > span { flex: 0 0 42%; color: var(--sleeve-dim); font-size: 13px; }
+.setup-map-row select { flex: 1; }
 .admin-head { color: var(--sleeve-dim); font-size: 12px; margin: 0 0 8px; }
 .admin-fields { max-height: 48vh; overflow-y: auto; margin-bottom: 14px; }
 .admin-field-card { border-bottom: 1px solid var(--line); padding: 8px 0; }
