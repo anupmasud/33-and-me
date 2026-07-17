@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "27";
+  const APP_VERSION = "28";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -117,6 +117,8 @@
     lists: { format: FORMAT_VALUES.slice(), condition: CONDITION_VALUES.slice(), genre: GENRE_VALUES.slice() },
     dateFormat: "yyyy-mm-dd",
     preferredCurrency: "USD",
+    collectionTab: "",   // "" = first non-app tab
+    wishlistTab: "",     // "" = "Wishlist" (created if absent)
     v: 3,
   });
   let SETTINGS = defaultSettings();
@@ -249,18 +251,25 @@
   const sameName = (a, b) =>
     (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
 
+  // The app's own bookkeeping tabs are never offered as a collection/wishlist.
+  const isAppTab = (title) => sameName(title, SETTINGS_SHEET) || sameName(title, LISTS_SHEET);
+
   async function ensureSetup() {
     let sheets = (await api("?fields=sheets.properties")).sheets.map((s) => s.properties);
+    const usable = sheets.filter((s) => !isAppTab(s.title));
+    // Tab choices come from Setup; fall back to config, then the first real tab.
+    const wantCollection = SETTINGS.collectionTab || C.COLLECTION_SHEET;
+    const wantWishlist = SETTINGS.wishlistTab || C.WISHLIST_SHEET || "Wishlist";
     state.collectionSheet =
-      sheets.find((s) => sameName(s.title, C.COLLECTION_SHEET)) || sheets[0];
-    state.wishlistSheet = sheets.find((s) => sameName(s.title, C.WISHLIST_SHEET)) || null;
+      (wantCollection && sheets.find((s) => sameName(s.title, wantCollection))) || usable[0] || sheets[0];
+    state.wishlistSheet = sheets.find((s) => sameName(s.title, wantWishlist)) || null;
 
-    // create Wishlist tab if missing
+    // create the wishlist tab if it's missing
     if (!state.wishlistSheet) {
       try {
         const r = await api(":batchUpdate", {
           method: "POST",
-          body: JSON.stringify({ requests: [{ addSheet: { properties: { title: C.WISHLIST_SHEET } } }] }),
+          body: JSON.stringify({ requests: [{ addSheet: { properties: { title: wantWishlist } } }] }),
         });
         state.wishlistSheet = r.replies[0].addSheet.properties;
         await api("/values/" + q(`${state.wishlistSheet.title}!A1`) + "?valueInputOption=USER_ENTERED", {
@@ -271,7 +280,7 @@
         // A tab differing only by case can slip past the check above and make
         // addSheet fail with "already exists" — re-read the tabs and use it.
         sheets = (await api("?fields=sheets.properties")).sheets.map((s) => s.properties);
-        state.wishlistSheet = sheets.find((s) => sameName(s.title, C.WISHLIST_SHEET)) || null;
+        state.wishlistSheet = sheets.find((s) => sameName(s.title, wantWishlist)) || null;
         if (!state.wishlistSheet) throw e;
       }
     }
@@ -616,6 +625,8 @@
           },
           dateFormat: p.dateFormat || SETTINGS.dateFormat,
           preferredCurrency: (p.preferredCurrency || SETTINGS.preferredCurrency).toUpperCase(),
+          collectionTab: p.collectionTab || "",
+          wishlistTab: p.wishlistTab || "",
           v: p.v || 1,
         };
         // Migration: settings saved before Currency/Date/Condition were made
@@ -1756,15 +1767,54 @@
     $("#app-view").classList.add("hidden");
   }
 
-  // ---------- sheet picker ----------
+  // ---------- setup wizard (sheet + tabs) ----------
+  // Read a given spreadsheet's tabs directly — this may be a sheet we haven't
+  // switched to yet, so it can't go through api() (which uses state.sheetId).
+  async function fetchTabs(sheetId) {
+    const token = await getToken(false).catch(() => getToken(true));
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties`,
+      { headers: { Authorization: "Bearer " + token } }
+    );
+    if (!res.ok) throw new Error("Sheets API " + res.status);
+    const d = await res.json();
+    return (d.sheets || []).map((s) => s.properties).filter((p) => !isAppTab(p.title));
+  }
+
+  const NEW_WISHLIST = "␞__new_wishlist__"; // sentinel (record-separator char can't be a tab name)
+
+  async function loadSetupTabs(id) {
+    const err = $("#sheet-error");
+    try {
+      const tabs = await fetchTabs(id);
+      const opt = (t, sel) => `<option value="${esc(t)}" ${sel ? "selected" : ""}>${esc(t)}</option>`;
+      const curCol = SETTINGS.collectionTab || (state.collectionSheet && state.collectionSheet.title) || "";
+      const curWish = SETTINGS.wishlistTab || (state.wishlistSheet && state.wishlistSheet.title) || "";
+      $("#setup-collection").innerHTML = tabs.map((t) => opt(t.title, sameName(t.title, curCol))).join("");
+      $("#setup-wishlist").innerHTML =
+        tabs.map((t) => opt(t.title, sameName(t.title, curWish))).join("") +
+        `<option value="${NEW_WISHLIST}" ${curWish ? "" : "selected"}>— create a “Wishlist” tab —</option>`;
+      $("#sheet-tabs").classList.remove("hidden");
+      err.classList.add("hidden");
+      return true;
+    } catch (e) {
+      $("#sheet-tabs").classList.add("hidden");
+      err.textContent = "Couldn't read that sheet's tabs. Check the link and that you can open it.";
+      err.classList.remove("hidden");
+      return false;
+    }
+  }
+
   function openSheetModal(firstRun) {
     const form = $("#sheet-form");
     $("#sheet-error").classList.add("hidden");
+    $("#sheet-tabs").classList.add("hidden");
     form.sheeturl.value = state.sheetId ? sheetUrl(state.sheetId) : "";
     // On mandatory first run (no sheet yet) there's nothing to cancel back to.
     $("#sheet-cancel").classList.toggle("hidden", !!firstRun && !state.sheetId);
     $("#sheet-modal").classList.remove("hidden");
     $("#sheet-backdrop").classList.remove("hidden");
+    if (state.sheetId) loadSetupTabs(state.sheetId); // prefill the tab pickers
     setTimeout(() => form.sheeturl.focus(), 60);
   }
 
@@ -1773,14 +1823,29 @@
     if ($("#add-sheet").classList.contains("hidden")) $("#sheet-backdrop").classList.add("hidden");
   }
 
-  function applySheet(id) {
-    if (id === state.sheetId) { closeSheetModal(); return; }
-    state.sheetId = id;
-    localStorage.setItem("sheetId33", id);
-    // reset per-sheet state so the new sheet is set up from scratch
-    state.collectionSheet = null; state.wishlistSheet = null;
-    state.collection = []; state.wishlist = [];
+  // Apply the chosen sheet + tabs, then reload the app.
+  async function applySetup(id) {
+    const switching = id !== state.sheetId;
+    if (switching) {
+      state.sheetId = id;
+      localStorage.setItem("sheetId33", id);
+      state.collectionSheet = null; state.wishlistSheet = null;
+      state.collection = []; state.wishlist = [];
+      await loadSettings().catch(() => {}); // adopt the new sheet's own settings
+    }
+    const tabsShown = !$("#sheet-tabs").classList.contains("hidden");
+    if (tabsShown) {
+      const wish = $("#setup-wishlist").value;
+      SETTINGS.collectionTab = $("#setup-collection").value || "";
+      SETTINGS.wishlistTab = wish === NEW_WISHLIST ? "" : wish;
+    }
     closeSheetModal();
+    setBusy(true);
+    try {
+      if (tabsShown) await saveSettings();
+    } catch (_) {
+      toast("Saved locally, but couldn't write settings to the sheet");
+    } finally { setBusy(false); }
     showApp();
   }
 
@@ -1792,8 +1857,8 @@
     if (hadCache) render();
     setBusy(true);
     try {
+      await loadSettings().catch(() => {}); // non-fatal; tab choices drive ensureSetup
       await ensureSetup();
-      await loadSettings().catch(() => {}); // non-fatal
       await loadData();
       $("#offline-badge").classList.add("hidden");
       render();
@@ -1831,16 +1896,23 @@
     $("#refresh-btn").addEventListener("click", showApp);
 
     $("#sheet-cancel").addEventListener("click", closeSheetModal);
-    $("#sheet-form").addEventListener("submit", (ev) => {
-      ev.preventDefault();
-      const id = parseSheetId(ev.target.sheeturl.value);
+    const setupSheetId = () => {
+      const id = parseSheetId($("#sheet-form").sheeturl.value);
       const err = $("#sheet-error");
       if (!id) {
         err.textContent = "That doesn't look like a Google Sheets link or ID.";
         err.classList.remove("hidden");
-        return;
       }
-      applySheet(id);
+      return id;
+    };
+    $("#sheet-loadtabs").addEventListener("click", async () => {
+      const id = setupSheetId();
+      if (id) await loadSetupTabs(id);
+    });
+    $("#sheet-form").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const id = setupSheetId();
+      if (id) applySetup(id);
     });
     $("#search-input").addEventListener("input", render);
     $("#sort-by").addEventListener("change", (ev) => {
@@ -1875,6 +1947,7 @@
     $("#admin-reset").addEventListener("click", () => renderAdmin(defaultSettings()));
     $("#admin-recompute").addEventListener("click", () => { closeAdmin(); recomputeCosts(); });
     $("#admin-fill-wish").addEventListener("click", () => { closeAdmin(); fillWishlistGenres(); });
+    $("#admin-setup").addEventListener("click", () => { closeAdmin(); openSheetModal(false); });
     $("#sheet-backdrop").addEventListener("click", () => {
       closeSheet();
       closeDetail();

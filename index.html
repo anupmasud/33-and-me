@@ -77,7 +77,7 @@
       <span class="statusbar-actions">
         <span id="app-version" class="app-version" title="App version"></span>
         <button id="admin-btn" class="linklike" title="Admin settings">Settings</button>
-        <button id="sheet-btn" class="linklike" title="Choose which Google Sheet this app uses">Sheet</button>
+        <button id="sheet-btn" class="linklike" title="Choose the sheet and which tabs to use">Setup</button>
         <button id="fill-genres-btn" class="linklike" title="Fill blank genres from the built-in list">Fill genres</button>
         <button id="signout-btn" class="linklike">Sign out</button>
       </span>
@@ -149,17 +149,24 @@
   <!-- ===================== Sheet picker ===================== -->
   <section id="sheet-modal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="sheet-modal-title">
     <div class="sheet-handle" aria-hidden="true"></div>
-    <h2 id="sheet-modal-title" class="sheet-title">Your Google Sheet</h2>
-    <p class="sheet-help">Paste the link (or ID) of the Google Sheet this app should read and write.
-      Make sure you're signed in as an account that can open it.</p>
+    <h2 id="sheet-modal-title" class="sheet-title">Setup</h2>
+    <p class="sheet-help">Point the app at your Google Sheet, then say which tab is your collection
+      and which is your wishlist. Sign in as an account that can open it.</p>
     <form id="sheet-form" class="form" novalidate>
       <label>Sheet URL or ID
         <input name="sheeturl" autocomplete="off" placeholder="https://docs.google.com/spreadsheets/d/…" />
       </label>
+      <button type="button" id="sheet-loadtabs" class="btn">Load tabs</button>
+      <div id="sheet-tabs" class="hidden">
+        <div class="grid2">
+          <label>Collection tab<select id="setup-collection"></select></label>
+          <label>Wishlist tab<select id="setup-wishlist"></select></label>
+        </div>
+      </div>
       <p id="sheet-error" class="dup hidden"></p>
       <div class="form-actions">
         <button type="button" id="sheet-cancel" class="btn">Cancel</button>
-        <button type="submit" class="btn btn-primary">Use this sheet</button>
+        <button type="submit" class="btn btn-primary">Save</button>
       </div>
     </form>
   </section>
@@ -193,6 +200,7 @@
       date when available, otherwise today's rate. After changing the preferred currency,
       recompute to update existing rows.</p>
     <div class="admin-tools">
+      <button type="button" id="admin-setup" class="btn">Setup: sheet &amp; tabs</button>
       <button type="button" id="admin-recompute" class="btn">Recompute costs</button>
       <button type="button" id="admin-fill-wish" class="btn">Fill wishlist genres</button>
     </div>
