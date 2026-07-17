@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "25";
+  const APP_VERSION = "26";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -1559,6 +1559,113 @@
     state.editItem = null;
   }
 
+  // ---------- genre lookup ----------
+  // External services use their own vocabulary, so map it onto the configured
+  // list. Anything we can't place confidently is left blank rather than
+  // polluting the taxonomy with things like "Worldwide".
+  const GENRE_SYNONYMS = {
+    "vocal jazz": "Jazz Vocal", "jazz vocal": "Jazz Vocal", "vocal": "Jazz Vocal",
+    "jazz fusion": "Jazz Fusion", "fusion": "Jazz Fusion", "jazz funk": "Jazz Fusion",
+    "hard bop": "Jazz", "bebop": "Jazz", "bop": "Jazz", "cool jazz": "Jazz",
+    "modal jazz": "Jazz", "free jazz": "Jazz", "spiritual jazz": "Jazz", "big band": "Jazz",
+    "swing": "Jazz", "dixieland": "Jazz", "soul jazz": "Jazz", "smooth jazz": "Jazz",
+    "hindustani classical": "Indian Classical", "carnatic": "Indian Classical",
+    "carnatic classical": "Indian Classical", "raga": "Indian Classical",
+    "indian classical music": "Indian Classical",
+    "thumri": "Indian Classical Vocal", "khayal": "Indian Classical Vocal",
+    "hindustani vocal": "Indian Classical Vocal", "ghazal": "Ghazals",
+    "qawwali": "World", "sufi": "World", "worldwide": "World", "world music": "World",
+    "afro-beat": "Afrobeat", "afro beat": "Afrobeat", "afropop": "West African",
+    "desert blues": "West African", "mande": "West African", "griot": "West African",
+    "highlife": "West African", "juju": "West African",
+    "r&b/soul": "Soul", "rnb": "R&B", "rhythm and blues": "R&B", "neo soul": "Soul",
+    "neo-soul": "Soul", "motown": "Soul", "northern soul": "Soul",
+    "folk rock": "Folk", "singer-songwriter": "Folk", "contemporary folk": "Folk",
+    "traditional folk": "Folk", "americana": "Americana / Bluegrass", "bluegrass": "Americana / Bluegrass",
+    "classic rock": "Classic Rock", "blues rock": "Rock", "hard rock": "Rock",
+    "psychedelic rock": "Psychedelic", "prog rock": "Progressive Rock",
+    "progressive rock": "Progressive Rock", "art rock": "Progressive Rock",
+    "alternative": "Indie / Alternative", "alternative rock": "Indie / Alternative",
+    "indie": "Indie / Alternative", "indie rock": "Indie / Alternative",
+    "new wave": "New Wave / Post-Punk", "post-punk": "New Wave / Post-Punk",
+    "hip hop": "Hip-Hop / Rap", "hip-hop": "Hip-Hop / Rap", "rap": "Hip-Hop / Rap",
+    "electronic": "Electronic", "electronica": "Electronic", "downtempo": "Electronic",
+    "soundtrack": "Soundtrack", "film score": "Soundtrack", "score": "Soundtrack",
+    "original score": "Soundtrack", "musicals": "Soundtrack",
+    "classical": "Western Classical", "baroque": "Western Classical",
+    "romantic": "Western Classical", "chamber music": "Western Classical",
+    "opera": "Opera", "bossa nova": "Bossa Nova", "samba": "Latin", "mpb": "Latin",
+    "salsa": "Cuban", "son cubano": "Cuban", "cuban": "Cuban", "latin": "Latin",
+    "spanish": "Spanish", "portuguese": "Portuguese", "fado": "Fado", "morna": "Morna",
+    "flamenco": "Flamenco", "reggae": "Reggae", "rocksteady": "Reggae", "ska": "Reggae",
+    "dub": "Reggae", "country": "Country", "gospel": "Gospel", "blues": "Blues",
+    "delta blues": "Blues", "chicago blues": "Blues", "spoken word": "Spoken Word",
+    "poetry": "Spoken Word", "acoustic": "Acoustic", "ambient": "Ambient",
+    "experimental": "Experimental", "avant-garde": "Experimental",
+    "bollywood": "Bollywood", "filmi": "Bollywood Soundtrack",
+    "middle eastern": "Middle Eastern", "arabic": "Middle Eastern",
+    "traditional": "Traditional", "folk": "Folk", "pop": "Pop", "rock": "Rock",
+    "soul": "Soul", "funk": "Funk", "disco": "Disco", "house": "House",
+    "techno": "Techno", "punk": "Punk", "metal": "Metal", "jazz": "Jazz",
+  };
+
+  // Map one external genre string onto the configured list; "" if unsure.
+  function mapGenre(raw) {
+    const n = norm(raw);
+    if (!n) return "";
+    const list = listOf("genre");
+    const exact = list.find((g) => norm(g) === n); // already one of ours?
+    if (exact) return exact;
+    const syn = GENRE_SYNONYMS[n];
+    return syn && list.includes(syn) ? syn : "";
+  }
+
+  // MusicBrainz first (its tags match this taxonomy far better), iTunes as a
+  // fallback (it finds more, but flattens world music into "Worldwide").
+  async function lookupGenre(artist, album) {
+    const j = (url) => fetch(url).then((r) => r.json());
+    try {
+      const q = encodeURIComponent(`artist:"${artist}" AND releasegroup:"${album}"`);
+      const s = await j(`https://musicbrainz.org/ws/2/release-group?query=${q}&fmt=json&limit=1`);
+      const rg = (s["release-groups"] || [])[0];
+      if (rg) {
+        const g = await j(`https://musicbrainz.org/ws/2/release-group/${rg.id}?fmt=json&inc=genres+artist-credits`);
+        const byCount = (arr) => (arr || []).slice().sort((a, b) => (b.count || 0) - (a.count || 0)).map((x) => x.name);
+        let names = byCount(g.genres);
+        if (!names.length) { // fall back to the artist's own tags
+          const aid = g["artist-credit"] && g["artist-credit"][0] && g["artist-credit"][0].artist.id;
+          if (aid) names = byCount((await j(`https://musicbrainz.org/ws/2/artist/${aid}?fmt=json&inc=genres`)).genres);
+        }
+        for (const raw of names) { const m = mapGenre(raw); if (m) return m; }
+      }
+    } catch (_) { /* fall through to iTunes */ }
+    try {
+      const d = await j(`https://itunes.apple.com/search?term=${encodeURIComponent(artist + " " + album)}&entity=album&limit=1`);
+      if (d.resultCount) return mapGenre(d.results[0].primaryGenreName);
+    } catch (_) {}
+    return "";
+  }
+
+  // Debounced online lookup, only once the collection has nothing to offer.
+  let genreTimer = null, genreSeq = 0;
+  function scheduleGenreLookup() {
+    clearTimeout(genreTimer);
+    genreTimer = setTimeout(async () => {
+      const f = $("#add-form");
+      if (!f.genre || f.genre.value.trim()) return;
+      const artist = f.artist.value.trim(), album = f.title.value.trim();
+      if (!artist || !album) return;
+      const seq = ++genreSeq;
+      const g = await lookupGenre(artist, album).catch(() => "");
+      if (seq !== genreSeq) return;            // superseded by newer typing
+      const ff = $("#add-form");
+      if (g && ff.genre && !ff.genre.value.trim()) {
+        ff.genre.value = g;
+        toast(`Genre looked up: ${g}`);
+      }
+    }, 800);
+  }
+
   // If the artist (or artist+album) already exists in the collection, borrow its
   // genre. Never overwrites a genre you've typed. Works for wishes too.
   function autoGenre() {
@@ -1726,8 +1833,10 @@
         document.querySelectorAll("[data-addmode]").forEach((x) => x.classList.toggle("active", x === b));
         applyAddMode();
       }));
-    $("#add-form").artist.addEventListener("input", () => { checkDup(); autoGenre(); });
-    $("#add-form").title.addEventListener("input", () => { checkDup(); autoGenre(); });
+    // Genre: try your own collection first (instant), then look it up online.
+    const onIdent = () => { checkDup(); autoGenre(); scheduleGenreLookup(); };
+    $("#add-form").artist.addEventListener("input", onIdent);
+    $("#add-form").title.addEventListener("input", onIdent);
     $("#add-form").price.addEventListener("input", updateCost);
     $("#add-form").currency.addEventListener("input", updateCost);
     $("#add-form").date.addEventListener("change", updateCost); // purchase date drives the rate
