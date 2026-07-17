@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "29";
+  const APP_VERSION = "30";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -121,10 +121,13 @@
     wishlistTab: "",     // "" = "Wishlist" (created if absent)
     hidden: {},          // field key -> true means exclude from form + detail
     defaults: {},        // field key -> value prefilled when adding
+    wish: { artist: true, title: true, genre: true, notes: true }, // fields on the wishlist
     v: 3,
   });
   // Artist/Title are load-bearing (dedupe, sort, genre lookup) — never hideable.
   const CORE_FIELDS = ["artist", "title"];
+  // Wishlist column names (backward compatible with the original 4-column tab).
+  const WISH_COL = { artist: "Artist", title: "Title", genre: "Genre", notes: "Notes" };
   // These already have their own value lists / controls, so no generic LOV box.
   const LOV_SPECIAL = ["genre", "format", "condition", "country", "artist"];
   let SETTINGS = defaultSettings();
@@ -133,6 +136,8 @@
   const requiredOf = (key) => !!(SETTINGS.required && SETTINGS.required[key]);
   const hiddenOf = (key) => !CORE_FIELDS.includes(key) && !!(SETTINGS.hidden && SETTINGS.hidden[key]);
   const defaultOf = (key) => (SETTINGS.defaults && SETTINGS.defaults[key]) || "";
+  const onWish = (key) => !!(SETTINGS.wish && SETTINGS.wish[key]);
+  const wishColName = (key) => WISH_COL[key] || FIELD_COLS[key] || key;
   // Never hand back an empty list: an empty/missing saved list would silently
   // wipe the sheet's dropdown, so fall back to the built-in defaults.
   const listOf = (key) => {
@@ -150,6 +155,8 @@
     wishlist: [],           // {row, artist, title, genre, notes}
     collectionSheet: null,  // {title, sheetId}
     wishlistSheet: null,
+    wishHeaders: [],        // wishlist header row
+    wishCol: {},            // wishlist header name -> index
     sheetId: "",            // active spreadsheet id (chosen at runtime)
     scope: "all",
     sortBy: "artist",       // display sort (the sheet itself stays Artist → Album)
@@ -291,6 +298,28 @@
         state.wishlistSheet = sheets.find((s) => sameName(s.title, wantWishlist)) || null;
         if (!state.wishlistSheet) throw e;
       }
+    }
+
+    // Ensure the wishlist has a column for every wish-enabled field, plus "Added".
+    // Columns are appended (never reordered) so existing wishlist data is safe.
+    {
+      const wt = state.wishlistSheet.title;
+      let wh = ((await api("/values/" + q(`${wt}!1:1`))).values || [[]])[0] || [];
+      if (!wh.length) wh = WISH_HEADER.slice();
+      const need = [];
+      FIELD_DEFS.forEach((fd) => {
+        if (onWish(fd.key) && !wh.includes(wishColName(fd.key))) need.push(wishColName(fd.key));
+      });
+      if (!wh.includes("Added")) need.push("Added");
+      if (need.length || !wh.length) {
+        wh = wh.concat(need);
+        await api("/values/" + q(`${wt}!1:1`) + "?valueInputOption=USER_ENTERED", {
+          method: "PUT", body: JSON.stringify({ values: [wh] }),
+        });
+      }
+      state.wishHeaders = wh;
+      state.wishCol = {};
+      wh.forEach((h, i) => { state.wishCol[h] = i; });
     }
 
     // ensure app columns exist on the collection header row
@@ -476,12 +505,12 @@
     await sortSheet(state.collectionSheet, specs, state.headers.length);
   }
 
-  // Wishlist columns are fixed: A=Artist B=Title C=Genre D=Notes E=Added.
   async function sortWishlist() {
-    await sortSheet(state.wishlistSheet, [
-      { dimensionIndex: 0, sortOrder: "ASCENDING" },
-      { dimensionIndex: 1, sortOrder: "ASCENDING" },
-    ], 5);
+    const a = state.wishCol["Artist"], t = state.wishCol["Title"];
+    const specs = [];
+    if (a !== undefined) specs.push({ dimensionIndex: a, sortOrder: "ASCENDING" });
+    if (t !== undefined) specs.push({ dimensionIndex: t, sortOrder: "ASCENDING" });
+    await sortSheet(state.wishlistSheet, specs, (state.wishHeaders || []).length || 5);
   }
 
   // The duplicated sheet had stray "Yes/No" dropdowns across many columns and
@@ -523,11 +552,12 @@
     rule("Genre", "A");
     rule("Country", "B");
 
-    // Same Genre dropdown on the Wishlist tab (fixed column C = Genre).
-    if (state.wishlistSheet) {
+    // Same Genre dropdown on the Wishlist tab, at whatever column Genre landed.
+    const wGenre = state.wishCol && state.wishCol["Genre"];
+    if (state.wishlistSheet && wGenre !== undefined) {
       requests.push({
         setDataValidation: {
-          range: { sheetId: state.wishlistSheet.sheetId, startRowIndex: 1, startColumnIndex: 2, endColumnIndex: 3 },
+          range: { sheetId: state.wishlistSheet.sheetId, startRowIndex: 1, startColumnIndex: wGenre, endColumnIndex: wGenre + 1 },
           rule: {
             condition: { type: "ONE_OF_RANGE", values: [{ userEnteredValue: listRange("A") }] },
             showCustomUi: true,
@@ -590,11 +620,20 @@
       notes: hv(r, "Notes"),
     })).filter((x) => x.artist || x.title);
 
+    // Wishlist is header-driven now (columns come from wish-enabled fields).
+    const wcol = state.wishCol || {};
+    const whv = (r, key) => { const i = wcol[wishColName(key)]; return i === undefined ? "" : (r[i] || ""); };
     const wrows = (wishRange.values || []).slice(1);
-    state.wishlist = wrows.map((r, i) => ({
-      row: i + 2,
-      artist: r[0] || "", title: r[1] || "", genre: r[2] || "", notes: r[3] || "",
-    })).filter((x) => x.artist || x.title || x.genre);
+    state.wishlist = wrows.map((r, i) => {
+      const item = { row: i + 2 };
+      FIELD_DEFS.forEach((fd) => { if (onWish(fd.key)) item[fd.key] = whv(r, fd.key); });
+      // render/search always reference these four:
+      item.artist = item.artist || whv(r, "artist");
+      item.title = item.title || whv(r, "title");
+      item.genre = item.genre || whv(r, "genre");
+      item.notes = item.notes || whv(r, "notes");
+      return item;
+    }).filter((x) => x.artist || x.title || x.genre);
 
     // Display order: Artist → Album. (Each item keeps its own sheet `row`, so
     // sorting the arrays is safe even if the sheet itself hasn't been sorted.)
@@ -630,6 +669,7 @@
           required: { ...SETTINGS.required, ...(p.required || {}) },
           hidden: { ...(p.hidden || {}) },
           defaults: { ...(p.defaults || {}) },
+          wish: { ...SETTINGS.wish, ...(p.wish || {}) },
           lists,
           dateFormat: p.dateFormat || SETTINGS.dateFormat,
           preferredCurrency: (p.preferredCurrency || SETTINGS.preferredCurrency).toUpperCase(),
@@ -724,11 +764,7 @@
   function applySettings() {
     FIELD_DEFS.forEach((fd) => {
       const lbl = document.querySelector(`[data-fl="${fd.key}"]`);
-      if (lbl) {
-        lbl.textContent = labelOf(fd.key);
-        const wrap = lbl.closest("label");
-        if (wrap) wrap.classList.toggle("field-hidden", hiddenOf(fd.key)); // include/exclude
-      }
+      if (lbl) lbl.textContent = labelOf(fd.key);
       const req = document.querySelector(`[data-req="${fd.key}"]`);
       if (req) req.classList.toggle("hidden", !requiredOf(fd.key));
       applyFieldLov(fd.key);
@@ -740,6 +776,7 @@
     }
     const cl = $("#cost-label");
     if (cl) cl.textContent = costColName();
+    updateFormFields(); // field-hidden is driven here (mode + hidden/wish settings)
   }
 
   // First required field (record mode) left empty → its label, else null.
@@ -1004,6 +1041,9 @@
           <label class="admin-tog" title="Required">
             <input type="checkbox" data-areq="${fd.key}" ${s.required[fd.key] ? "checked" : ""} /><span>req</span>
           </label>
+          <label class="admin-tog" title="Include on the wishlist">
+            <input type="checkbox" data-awish="${fd.key}" ${s.wish && s.wish[fd.key] ? "checked" : ""} /><span>wish</span>
+          </label>
         </div>
         <div class="admin-field2">
           <input class="admin-default" data-adef="${fd.key}" value="${def}" placeholder="default value" aria-label="Default for ${esc(fd.key)}" />
@@ -1038,15 +1078,19 @@
     const prevPref = prefCurrency();
     SETTINGS.hidden = SETTINGS.hidden || {};
     SETTINGS.defaults = SETTINGS.defaults || {};
+    SETTINGS.wish = SETTINGS.wish || {};
+    const prevWish = JSON.stringify(SETTINGS.wish);
     const newLists = {};
     FIELD_DEFS.forEach((fd) => {
       const lin = document.querySelector(`.admin-label[data-akey="${fd.key}"]`);
       const cb = document.querySelector(`[data-areq="${fd.key}"]`);
       const sh = document.querySelector(`[data-ashow="${fd.key}"]`);
+      const ws = document.querySelector(`[data-awish="${fd.key}"]`);
       const df = document.querySelector(`.admin-default[data-adef="${fd.key}"]`);
       const vi = document.querySelector(`.admin-values[data-alov="${fd.key}"]`);
       if (lin) SETTINGS.labels[fd.key] = lin.value.trim() || fd.label;
       if (cb) SETTINGS.required[fd.key] = cb.checked;
+      if (ws) SETTINGS.wish[fd.key] = ws.checked;
       SETTINGS.hidden[fd.key] = sh ? !sh.checked : false; // core fields (no checkbox) always shown
       const dv = df ? df.value.trim() : "";
       if (dv) SETTINGS.defaults[fd.key] = dv; else delete SETTINGS.defaults[fd.key];
@@ -1077,10 +1121,14 @@
         await fixValidation().catch(() => {});
       }
       closeAdmin();
+      const wishChanged = JSON.stringify(SETTINGS.wish) !== prevWish;
       if (prefCurrency() !== prevPref) {
         // Rename the cost column to the new currency, then prompt to recompute.
         await showApp();
         toast(`Cost column is now ${costColName()} — use “Recompute costs” to update existing rows`, 6000);
+      } else if (wishChanged) {
+        await showApp(); // add any new wishlist columns and reload
+        toast("Settings saved ✓ — wishlist fields updated");
       } else {
         toast("Settings saved ✓");
       }
@@ -1152,11 +1200,16 @@
   }
 
   async function addWish(f) {
+    const wt = state.wishlistSheet.title;
+    const row = new Array((state.wishHeaders || []).length || 5).fill("");
+    const wput = (colName, val) => { const i = state.wishCol[colName]; if (i !== undefined) row[i] = val; };
+    FIELD_DEFS.forEach((fd) => { if (onWish(fd.key)) wput(wishColName(fd.key), f[fd.key] || ""); });
+    wput("Added", todayISO());
     setBusy(true);
     try {
-      await api("/values/" + q(state.wishlistSheet.title) + ":append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS", {
+      await api("/values/" + q(wt) + ":append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS", {
         method: "POST",
-        body: JSON.stringify({ values: [[f.artist, f.title, f.genre, f.notes, todayISO()]] }),
+        body: JSON.stringify({ values: [row] }),
       });
       await sortWishlist().catch(() => {}); // appended at the bottom — re-sort
       await loadData();
@@ -1167,15 +1220,22 @@
     } finally { setBusy(false); }
   }
 
-  // Wishlist columns are fixed: A=Artist B=Title C=Genre D=Notes E=Added.
-  // Write A–D and leave the "Added" date untouched.
+  // Update the wish-enabled field columns for this row; "Added" is left as-is.
   async function updateWish(row, f) {
     const t = state.wishlistSheet.title;
+    const data = [];
+    FIELD_DEFS.forEach((fd) => {
+      if (!onWish(fd.key)) return;
+      const i = state.wishCol[wishColName(fd.key)];
+      if (i === undefined) return;
+      data.push({ range: `${t}!${colLetter(i)}${row}`, values: [[f[fd.key] || ""]] });
+    });
+    if (!data.length) { closeSheet(); return; }
     setBusy(true);
     try {
-      await api("/values/" + q(`${t}!A${row}:D${row}`) + "?valueInputOption=USER_ENTERED", {
-        method: "PUT",
-        body: JSON.stringify({ values: [[f.artist, f.title, f.genre, f.notes]] }),
+      await api("/values:batchUpdate", {
+        method: "POST",
+        body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
       });
       await sortWishlist().catch(() => {}); // artist/title may have changed
       await loadData();
@@ -1633,11 +1693,26 @@
     setTimeout(() => form.artist.focus(), 60);
   }
 
+  // Show each field per the current mode: record mode → not-excluded fields;
+  // wish mode → the fields enabled for the wishlist. Cost is record-only.
+  function updateFormFields() {
+    const wish = state.addMode === "wish";
+    const form = $("#add-form");
+    if (!form) return;
+    FIELD_DEFS.forEach((fd) => {
+      const lbl = document.querySelector(`[data-fl="${fd.key}"]`);
+      const wrap = lbl && lbl.closest("label");
+      if (!wrap) return;
+      const show = wish ? onWish(fd.key) : !hiddenOf(fd.key);
+      wrap.classList.toggle("field-hidden", !show);
+    });
+    const cost = form.cost && form.cost.closest("label");
+    if (cost) cost.classList.toggle("field-hidden", wish);
+  }
+
   function applyAddMode() {
-    const record = state.addMode === "record";
-    document.querySelectorAll(".record-only").forEach((el) => el.classList.toggle("hidden-mode", !record));
-    document.querySelectorAll(".req-record").forEach((el) => el.classList.toggle("hidden-mode", !record));
-    $("#save-add").textContent = record ? "Save record" : "Save wish";
+    $("#save-add").textContent = state.addMode === "record" ? "Save record" : "Save wish";
+    updateFormFields();
   }
 
   function closeSheet() {
@@ -2095,7 +2170,9 @@
       }
       else if (btn.dataset.editwish !== undefined) {
         const w = render._wishHits[+btn.dataset.editwish];
-        openSheet("wish", { artist: w.artist, title: w.title, genre: w.genre, notes: w.notes }, null, w.row);
+        const prefill = {};
+        FIELD_DEFS.forEach((fd) => { if (onWish(fd.key)) prefill[fd.key] = w[fd.key] || ""; });
+        openSheet("wish", prefill, null, w.row);
       }
       else if (btn.dataset.unwish !== undefined) removeWish(render._wishHits[+btn.dataset.unwish]);
       else if (btn.dataset.wishquick !== undefined) {
