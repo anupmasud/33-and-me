@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "32";
+  const APP_VERSION = "33";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -166,6 +166,7 @@
     wishlistSheet: null,
     wishHeaders: [],        // wishlist header row
     wishCol: {},            // wishlist header name -> index
+    canWrite: true,         // false when the user only has view access
     sheetId: "",            // active spreadsheet id (chosen at runtime)
     scope: "all",
     sortBy: "artist",       // display sort (the sheet itself stays Artist → Album)
@@ -261,6 +262,11 @@
       state.token = null;
       return api(path, opts, false);
     }
+    // A 403 on a write means view-only access — flip the UI to read-only.
+    if (res.status === 403 && opts.method && opts.method !== "GET" && state.canWrite) {
+      state.canWrite = false;
+      try { applyReadOnlyUI(); render(); toast("This sheet is view-only for you"); } catch (_) {}
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error("Sheets API " + res.status + ": " + body.slice(0, 200));
@@ -278,6 +284,20 @@
   // The app's own bookkeeping tabs are never offered as a collection/wishlist.
   const isAppTab = (title) => sameName(title, SETTINGS_SHEET) || sameName(title, LISTS_SHEET);
 
+  // Detect view-only access: read A1 of the collection tab, then write it back
+  // unchanged. Editors get a harmless no-op; viewers get a 403 → read-only.
+  async function probeWrite() {
+    try {
+      const t = state.collectionSheet.title;
+      const cur = ((await api("/values/" + q(`${t}!A1`))).values || [[]])[0] || [];
+      await api("/values/" + q(`${t}!A1`) + "?valueInputOption=USER_ENTERED",
+        { method: "PUT", body: JSON.stringify({ values: [cur.length ? cur : [""]] }) });
+      return true;
+    } catch (e) {
+      return !String((e && e.message) || "").includes(" 403"); // 403 ⇒ view-only
+    }
+  }
+
   async function ensureSetup() {
     let sheets = (await api("?fields=sheets.properties")).sheets.map((s) => s.properties);
     const usable = sheets.filter((s) => !isAppTab(s.title));
@@ -288,8 +308,10 @@
       (wantCollection && sheets.find((s) => sameName(s.title, wantCollection))) || usable[0] || sheets[0];
     state.wishlistSheet = sheets.find((s) => sameName(s.title, wantWishlist)) || null;
 
-    // create the wishlist tab if it's missing
-    if (!state.wishlistSheet) {
+    state.canWrite = await probeWrite();
+
+    // create the wishlist tab if it's missing (only when we can write)
+    if (!state.wishlistSheet && state.canWrite) {
       try {
         const r = await api(":batchUpdate", {
           method: "POST",
@@ -311,7 +333,7 @@
 
     // Ensure the wishlist has a column for every wish-enabled field, plus "Added".
     // Columns are appended (never reordered) so existing wishlist data is safe.
-    {
+    if (state.wishlistSheet) {
       const wt = state.wishlistSheet.title;
       let wh = ((await api("/values/" + q(`${wt}!1:1`))).values || [[]])[0] || [];
       if (!wh.length) wh = WISH_HEADER.slice();
@@ -320,8 +342,8 @@
         if (onWish(fd.key) && !wh.includes(wishColName(fd.key))) need.push(wishColName(fd.key));
       });
       if (!wh.includes("Added")) need.push("Added");
-      // With a mapping, use the user's wishlist columns as-is (don't append).
-      if ((need.length && !isWishMapped()) || !wh.length) {
+      // With a mapping (or view-only access), use the user's columns as-is.
+      if (state.canWrite && ((need.length && !isWishMapped()) || !wh.length)) {
         wh = wh.concat(isWishMapped() ? [] : need);
         await api("/values/" + q(`${wt}!1:1`) + "?valueInputOption=USER_ENTERED", {
           method: "PUT", body: JSON.stringify({ values: [wh] }),
@@ -336,9 +358,9 @@
     const t = state.collectionSheet.title;
     let headers = ((await api("/values/" + q(`${t}!1:1`))).values || [[]])[0] || [];
 
-    // When the user has mapped their own columns, don't impose the app's schema
-    // (renames/inserts/added columns) — just use their file as-is.
-    if (!isMapped()) {
+    // When the user has mapped their own columns, or only has view access,
+    // don't impose the app's schema — just use their file as-is.
+    if (!isMapped() && state.canWrite) {
     // Insert Label + Year Released right after the Title column if they're missing.
     const titleIdx = headers.indexOf("Album Name") >= 0 ? headers.indexOf("Album Name") : headers.indexOf("Title");
     const insertCols = ["Label", "Year Released"].filter((c) => !headers.includes(c));
@@ -609,10 +631,8 @@
 
   async function loadData() {
     const t = state.collectionSheet.title;
-    const data = await api(
-      "/values:batchGet?ranges=" + q(t) + "&ranges=" + q(state.wishlistSheet.title) +
-      "&majorDimension=ROWS"
-    );
+    const ranges = "ranges=" + q(t) + (state.wishlistSheet ? "&ranges=" + q(state.wishlistSheet.title) : "");
+    const data = await api("/values:batchGet?" + ranges + "&majorDimension=ROWS");
     const [colRange, wishRange] = data.valueRanges;
 
     // Read collection columns by field key through the mapping (colName).
@@ -630,7 +650,7 @@
     // Wishlist is header-driven now (columns come from wish-enabled fields).
     const wcol = state.wishCol || {};
     const whv = (r, key) => { const i = wcol[wishColName(key)]; return i === undefined ? "" : (r[i] || ""); };
-    const wrows = (wishRange.values || []).slice(1);
+    const wrows = ((wishRange && wishRange.values) || []).slice(1);
     state.wishlist = wrows.map((r, i) => {
       const item = { row: i + 2 };
       FIELD_DEFS.forEach((fd) => { if (onWish(fd.key)) item[fd.key] = whv(r, fd.key); });
@@ -1586,7 +1606,7 @@
         out.push(`<div class="card"><div class="card-main">
           <div class="card-title">Not in your crates</div>
           <div class="card-meta">No copy of this in your collection.</div></div>
-          <button class="chip-btn" data-wishquick="1">+ Wishlist</button></div>`);
+          ${state.canWrite ? `<button class="chip-btn" data-wishquick="1">+ Wishlist</button>` : ""}</div>`);
       }
       colHits.slice(0, 80).forEach((i, idx) => {
         out.push(`<div class="card rec">
@@ -1597,9 +1617,9 @@
             ${i.notes ? `<div class="card-notes">${esc(i.notes)}</div>` : ""}
           </div>
           <div class="rec-actions">
-            <button class="listen-btn" data-listen="${idx}">♪ Listened</button>
+            ${state.canWrite ? `<button class="listen-btn" data-listen="${idx}">♪ Listened</button>` : ""}
             <div class="listen-meta">${i.listens ? `${i.listens}× · ${esc(i.lastListened || "")}` : "never played"}</div>
-            <button class="chip-btn" data-edit="${idx}">Edit</button>
+            ${state.canWrite ? `<button class="chip-btn" data-edit="${idx}">Edit</button>` : ""}
           </div>
         </div>`);
       });
@@ -1618,11 +1638,11 @@
             <div class="card-artist">${esc(i.artist)}</div>
             <div class="card-meta">${esc([i.genre, i.notes].filter(Boolean).join(" · "))}</div>
           </div>
-          <div class="wish-actions">
+          ${state.canWrite ? `<div class="wish-actions">
             <button class="chip-btn got" data-got="${idx}">Got it!</button>
             <button class="chip-btn" data-editwish="${idx}">Edit</button>
             <button class="chip-btn" data-unwish="${idx}">Remove</button>
-          </div>
+          </div>` : ""}
         </div>`);
       });
       render._wishHits = wishHits;
@@ -1718,6 +1738,18 @@
   function applyAddMode() {
     $("#save-add").textContent = state.addMode === "record" ? "Save record" : "Save wish";
     updateFormFields();
+  }
+
+  // Toggle all write-oriented chrome for view-only users.
+  function applyReadOnlyUI() {
+    const ro = !state.canWrite;
+    const set = (sel, hide) => { const el = $(sel); if (el) el.classList.toggle("hidden", hide); };
+    set("#add-btn", ro);            // the + FAB
+    set("#viewonly-badge", !ro);    // "View only" indicator
+    set("#admin-btn", ro);          // Settings (writes 33Settings)
+    set("#fill-genres-btn", ro);    // Fill genres (writes)
+    set("#detail-edit", ro);
+    set("#detail-delete", ro);
   }
 
   function closeSheet() {
@@ -2129,12 +2161,14 @@
       await ensureSetup();
       await loadData();
       $("#offline-badge").classList.add("hidden");
+      applyReadOnlyUI();
       render();
-      // Background: refresh the hidden lookup tab from the admin lists, then
-      // (re)apply the sheet's validation, which points at that tab's ranges.
-      syncLists()
-        .catch((e) => console.error("33&Me: list sync failed:", e))
-        .then(() => maybeFixValidation()); // never blocks showing records
+      // Background housekeeping writes only make sense for editors.
+      if (state.canWrite) {
+        syncLists()
+          .catch((e) => console.error("33&Me: list sync failed:", e))
+          .then(() => maybeFixValidation()); // never blocks showing records
+      }
     } catch (e) {
       if (hadCache) {
         $("#offline-badge").classList.remove("hidden");
