@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "28";
+  const APP_VERSION = "29";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -119,12 +119,20 @@
     preferredCurrency: "USD",
     collectionTab: "",   // "" = first non-app tab
     wishlistTab: "",     // "" = "Wishlist" (created if absent)
+    hidden: {},          // field key -> true means exclude from form + detail
+    defaults: {},        // field key -> value prefilled when adding
     v: 3,
   });
+  // Artist/Title are load-bearing (dedupe, sort, genre lookup) — never hideable.
+  const CORE_FIELDS = ["artist", "title"];
+  // These already have their own value lists / controls, so no generic LOV box.
+  const LOV_SPECIAL = ["genre", "format", "condition", "country", "artist"];
   let SETTINGS = defaultSettings();
   const prefCurrency = () => (SETTINGS.preferredCurrency || "USD").toUpperCase();
   const labelOf = (key) => (SETTINGS.labels && SETTINGS.labels[key]) || key;
   const requiredOf = (key) => !!(SETTINGS.required && SETTINGS.required[key]);
+  const hiddenOf = (key) => !CORE_FIELDS.includes(key) && !!(SETTINGS.hidden && SETTINGS.hidden[key]);
+  const defaultOf = (key) => (SETTINGS.defaults && SETTINGS.defaults[key]) || "";
   // Never hand back an empty list: an empty/missing saved list would silently
   // wipe the sheet's dropdown, so fall back to the built-in defaults.
   const listOf = (key) => {
@@ -615,14 +623,14 @@
       if (raw) {
         const p = JSON.parse(raw);
         const pl = p.lists || {};
+        const lists = { ...SETTINGS.lists }; // defaults for format/condition/genre
+        for (const [k, v] of Object.entries(pl)) if (Array.isArray(v)) lists[k] = v; // any field
         SETTINGS = {
           labels: { ...SETTINGS.labels, ...(p.labels || {}) },
           required: { ...SETTINGS.required, ...(p.required || {}) },
-          lists: {
-            format: Array.isArray(pl.format) && pl.format.length ? pl.format : SETTINGS.lists.format,
-            condition: Array.isArray(pl.condition) && pl.condition.length ? pl.condition : SETTINGS.lists.condition,
-            genre: Array.isArray(pl.genre) && pl.genre.length ? pl.genre : SETTINGS.lists.genre,
-          },
+          hidden: { ...(p.hidden || {}) },
+          defaults: { ...(p.defaults || {}) },
+          lists,
           dateFormat: p.dateFormat || SETTINGS.dateFormat,
           preferredCurrency: (p.preferredCurrency || SETTINGS.preferredCurrency).toUpperCase(),
           collectionTab: p.collectionTab || "",
@@ -695,12 +703,35 @@
     if (opts.includes(cur)) sel.value = cur;
     else if (blankFirst) sel.value = "";
   }
+  // Attach (or remove) a suggestion datalist on a text field from its LOV.
+  function applyFieldLov(key) {
+    const input = document.querySelector(`#add-form [name="${key}"]`);
+    if (!input || input.tagName === "SELECT" || input.tagName === "TEXTAREA" || input.readOnly) return;
+    if (LOV_SPECIAL.includes(key)) return; // genre/country/etc. keep their own lists
+    const vals = listOf(key);
+    const id = "lov-" + key;
+    let dl = document.getElementById(id);
+    if (vals.length) {
+      if (!dl) { dl = document.createElement("datalist"); dl.id = id; input.after(dl); }
+      dl.innerHTML = vals.map((v) => `<option value="${esc(v)}">`).join("");
+      input.setAttribute("list", id);
+    } else if (dl) {
+      input.removeAttribute("list");
+      dl.remove();
+    }
+  }
+
   function applySettings() {
     FIELD_DEFS.forEach((fd) => {
       const lbl = document.querySelector(`[data-fl="${fd.key}"]`);
-      if (lbl) lbl.textContent = labelOf(fd.key);
+      if (lbl) {
+        lbl.textContent = labelOf(fd.key);
+        const wrap = lbl.closest("label");
+        if (wrap) wrap.classList.toggle("field-hidden", hiddenOf(fd.key)); // include/exclude
+      }
       const req = document.querySelector(`[data-req="${fd.key}"]`);
       if (req) req.classList.toggle("hidden", !requiredOf(fd.key));
+      applyFieldLov(fd.key);
     });
     const form = $("#add-form");
     if (form) {
@@ -714,7 +745,7 @@
   // First required field (record mode) left empty → its label, else null.
   function missingRequired(data) {
     for (const fd of FIELD_DEFS) {
-      if (!requiredOf(fd.key)) continue;
+      if (!requiredOf(fd.key) || hiddenOf(fd.key)) continue; // can't require a hidden field
       if (!String(data[fd.key] == null ? "" : data[fd.key]).trim()) return labelOf(fd.key);
     }
     return null;
@@ -915,6 +946,13 @@
     if (header === "Title") return labelOf("title");
     return header;
   }
+  // Is this sheet column an excluded field?
+  function hiddenColumn(header) {
+    for (const [key, col] of Object.entries(FIELD_COLS)) {
+      if (col === header && hiddenOf(key)) return true;
+    }
+    return false;
+  }
 
   async function openDetail(item) {
     const t = state.collectionSheet.title;
@@ -927,6 +965,7 @@
       const rows = [];
       state.headers.forEach((h, i) => {
         if (h === "Artist" || h === "Album Name" || h === "Title") return; // shown in the header
+        if (hiddenColumn(h)) return; // field excluded in admin
         const v = (vals[i] == null ? "" : String(vals[i])).trim();
         if (!v) return;
         rows.push(`<dt>${esc(columnLabel(h))}</dt><dd>${esc(v)}</dd>`);
@@ -948,11 +987,32 @@
 
   // ---------- admin settings UI ----------
   function renderAdmin(s) {
-    $("#admin-fields").innerHTML = FIELD_DEFS.map((fd) => `
-      <div class="admin-field">
-        <input class="admin-label" data-akey="${fd.key}" value="${esc(s.labels[fd.key] || fd.label)}" aria-label="Label for ${esc(fd.key)}" />
-        <label class="admin-req"><input type="checkbox" data-areq="${fd.key}" ${s.required[fd.key] ? "checked" : ""} /></label>
-      </div>`).join("");
+    $("#admin-fields").innerHTML = FIELD_DEFS.map((fd) => {
+      const isCore = CORE_FIELDS.includes(fd.key);
+      const hasLov = !LOV_SPECIAL.includes(fd.key) && fd.key !== "notes";
+      const shown = !(s.hidden && s.hidden[fd.key]);
+      const def = esc((s.defaults && s.defaults[fd.key]) || "");
+      const lov = esc(((s.lists && s.lists[fd.key]) || []).join(", "));
+      return `
+      <div class="admin-field-card">
+        <div class="admin-field">
+          <input class="admin-label" data-akey="${fd.key}" value="${esc(s.labels[fd.key] || fd.label)}" aria-label="Label for ${esc(fd.key)}" />
+          <label class="admin-tog" title="Show this field">
+            ${isCore ? '<span class="admin-fixed">always</span>' : `<input type="checkbox" data-ashow="${fd.key}" ${shown ? "checked" : ""} />`}
+            <span>show</span>
+          </label>
+          <label class="admin-tog" title="Required">
+            <input type="checkbox" data-areq="${fd.key}" ${s.required[fd.key] ? "checked" : ""} /><span>req</span>
+          </label>
+        </div>
+        <div class="admin-field2">
+          <input class="admin-default" data-adef="${fd.key}" value="${def}" placeholder="default value" aria-label="Default for ${esc(fd.key)}" />
+          ${hasLov
+            ? `<input class="admin-values" data-alov="${fd.key}" value="${lov}" placeholder="dropdown values (comma-separated)" aria-label="Values for ${esc(fd.key)}" />`
+            : `<span class="admin-note2">${LOV_SPECIAL.includes(fd.key) && fd.key !== "artist" ? "list edited below" : ""}</span>`}
+        </div>
+      </div>`;
+    }).join("");
     $("#admin-dateformat").innerHTML = DATE_FORMATS
       .map((f) => `<option ${f === s.dateFormat ? "selected" : ""}>${f}</option>`).join("");
     $("#admin-prefcur").value = s.preferredCurrency || "USD";
@@ -976,21 +1036,33 @@
     const prevDateFormat = SETTINGS.dateFormat;
     const prevLists = JSON.stringify(SETTINGS.lists);
     const prevPref = prefCurrency();
+    SETTINGS.hidden = SETTINGS.hidden || {};
+    SETTINGS.defaults = SETTINGS.defaults || {};
+    const newLists = {};
     FIELD_DEFS.forEach((fd) => {
       const lin = document.querySelector(`.admin-label[data-akey="${fd.key}"]`);
       const cb = document.querySelector(`[data-areq="${fd.key}"]`);
+      const sh = document.querySelector(`[data-ashow="${fd.key}"]`);
+      const df = document.querySelector(`.admin-default[data-adef="${fd.key}"]`);
+      const vi = document.querySelector(`.admin-values[data-alov="${fd.key}"]`);
       if (lin) SETTINGS.labels[fd.key] = lin.value.trim() || fd.label;
       if (cb) SETTINGS.required[fd.key] = cb.checked;
+      SETTINGS.hidden[fd.key] = sh ? !sh.checked : false; // core fields (no checkbox) always shown
+      const dv = df ? df.value.trim() : "";
+      if (dv) SETTINGS.defaults[fd.key] = dv; else delete SETTINGS.defaults[fd.key];
+      if (vi) {
+        const arr = [...new Set(vi.value.split(",").map((x) => x.trim()).filter(Boolean))];
+        if (arr.length) newLists[fd.key] = arr;
+      }
     });
     const parseList = (sel, fallback) => {
       const arr = [...new Set($(sel).value.split("\n").map((x) => x.trim()).filter(Boolean))];
       return arr.length ? arr : fallback;
     };
-    SETTINGS.lists = {
-      format: parseList("#admin-list-format", SETTINGS.lists.format),
-      condition: parseList("#admin-list-condition", SETTINGS.lists.condition),
-      genre: parseList("#admin-list-genre", SETTINGS.lists.genre),
-    };
+    newLists.format = parseList("#admin-list-format", SETTINGS.lists.format);
+    newLists.condition = parseList("#admin-list-condition", SETTINGS.lists.condition);
+    newLists.genre = parseList("#admin-list-genre", SETTINGS.lists.genre);
+    SETTINGS.lists = newLists;
     SETTINGS.dateFormat = $("#admin-dateformat").value || "yyyy-mm-dd";
     SETTINGS.preferredCurrency = ($("#admin-prefcur").value.trim() || "USD").toUpperCase();
     applySettings();
@@ -1517,7 +1589,14 @@
     applyAddMode();
     const form = $("#add-form");
     form.reset();
-    // No auto-defaults for date/currency/condition — they stay blank until entered.
+    // Admin-configured per-field defaults (only when adding; prefill overrides).
+    FIELD_DEFS.forEach((fd) => {
+      const d = defaultOf(fd.key);
+      const el = form[fd.key];
+      if (!d || !el) return;
+      if (el.tagName === "SELECT") { if ([...el.options].some((o) => o.value === d)) el.value = d; }
+      else el.value = d;
+    });
     if (prefill) {
       form.artist.value = prefill.artist || "";
       form.title.value = prefill.title || "";
