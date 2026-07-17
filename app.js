@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "24";
+  const APP_VERSION = "25";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -70,7 +70,7 @@
     "United Kingdom", "United States", "Uruguay", "Uzbekistan", "Venezuela",
     "Vietnam", "Yemen", "Zambia", "Zimbabwe",
   ];
-  const VALIDATION_VERSION = "v7";
+  const VALIDATION_VERSION = "v8";
 
   // ---------- admin settings (Phase 1) ----------
   // Editable per-field settings. Defaults here; overrides load from a hidden
@@ -142,6 +142,7 @@
     wishlistSheet: null,
     sheetId: "",            // active spreadsheet id (chosen at runtime)
     scope: "all",
+    sortBy: "artist",       // display sort (the sheet itself stays Artist → Album)
     addMode: "record",
     pendingWishRow: null,   // wish row to delete after "Got it" save
     editRow: null,          // collection row being edited (null = adding)
@@ -415,6 +416,24 @@
     (a.artist || "").localeCompare(b.artist || "", undefined, { sensitivity: "base" }) ||
     (a.title || "").localeCompare(b.title || "", undefined, { sensitivity: "base" });
 
+  // Display comparator for the sort picker. Blanks always sink to the bottom,
+  // and Artist → Album is the tiebreaker so equal keys stay predictable.
+  function makeCmp(key) {
+    const blank = (v) => (v == null || String(v).trim() === "" ? 1 : 0);
+    if (key === "listens") { // most-played first
+      return (a, b) => (b.listens || 0) - (a.listens || 0) || byArtistTitle(a, b);
+    }
+    if (key === "lastListened") { // most recent first
+      return (a, b) => blank(a.lastListened) - blank(b.lastListened) ||
+        String(b.lastListened || "").localeCompare(String(a.lastListened || "")) || byArtistTitle(a, b);
+    }
+    const numeric = key === "yearReleased" || key === "year";
+    return (a, b) =>
+      blank(a[key]) - blank(b[key]) ||
+      String(a[key] || "").localeCompare(String(b[key] || ""), undefined, { sensitivity: "base", numeric }) ||
+      byArtistTitle(a, b);
+  }
+
   async function sortSheet(sheetProps, specs, nCols) {
     if (!sheetProps || !specs.length) return;
     await api(":batchUpdate", {
@@ -486,6 +505,20 @@
     rule("Format", "C");
     rule("Genre", "A");
     rule("Country", "B");
+
+    // Same Genre dropdown on the Wishlist tab (fixed column C = Genre).
+    if (state.wishlistSheet) {
+      requests.push({
+        setDataValidation: {
+          range: { sheetId: state.wishlistSheet.sheetId, startRowIndex: 1, startColumnIndex: 2, endColumnIndex: 3 },
+          rule: {
+            condition: { type: "ONE_OF_RANGE", values: [{ userEnteredValue: listRange("A") }] },
+            showCustomUi: true,
+            strict: false,
+          },
+        },
+      });
+    }
 
     // 3. Fix number/date formats on the columns the app writes.
     const fmt = (colName, numberFormat) => {
@@ -1394,8 +1427,10 @@
     const scope = state.scope;
     const out = [];
 
-    const colHits = terms.length ? state.collection.filter((i) => matches(i, terms)) : state.collection;
-    const wishHits = terms.length ? state.wishlist.filter((i) => matches(i, terms)) : state.wishlist;
+    // Copy before sorting — state.collection/wishlist stay in sheet order.
+    const cmp = makeCmp(state.sortBy);
+    const colHits = (terms.length ? state.collection.filter((i) => matches(i, terms)) : state.collection).slice().sort(cmp);
+    const wishHits = (terms.length ? state.wishlist.filter((i) => matches(i, terms)) : state.wishlist).slice().sort(cmp);
 
     if (scope !== "wishlist") {
       out.push(`<div class="group-label">Collection · ${colHits.length}</div>`);
@@ -1498,6 +1533,9 @@
     // genre suggestions: the configured list plus any genres already in the sheet
     const genres = [...new Set([...listOf("genre"), ...state.collection.map((i) => i.genre)].filter(Boolean))].sort();
     $("#genre-list").innerHTML = genres.map((g) => `<option value="${esc(g)}">`).join("");
+    // artist suggestions from what you already own (drives the genre auto-fill)
+    const artists = [...new Set(state.collection.map((i) => i.artist).filter(Boolean))].sort();
+    $("#artist-list").innerHTML = artists.map((a) => `<option value="${esc(a)}">`).join("");
     // country suggestions: the country list plus any already in the sheet
     const countries = [...new Set([...COUNTRY_VALUES, ...state.collection.map((i) => i.country)].filter(Boolean))].sort();
     $("#country-list").innerHTML = countries.map((c) => `<option value="${esc(c)}">`).join("");
@@ -1519,6 +1557,19 @@
     state.editRow = null;
     state.editWishRow = null;
     state.editItem = null;
+  }
+
+  // If the artist (or artist+album) already exists in the collection, borrow its
+  // genre. Never overwrites a genre you've typed. Works for wishes too.
+  function autoGenre() {
+    const f = $("#add-form");
+    if (!f.genre || f.genre.value.trim()) return;
+    const a = norm(f.artist.value), t = norm(f.title.value);
+    if (!a) return;
+    const hit =
+      (t && state.collection.find((i) => i.genre && norm(i.artist) === a && norm(i.title) === t)) ||
+      state.collection.find((i) => i.genre && norm(i.artist) === a);
+    if (hit) f.genre.value = hit.genre;
   }
 
   function checkDup() {
@@ -1631,6 +1682,11 @@
       applySheet(id);
     });
     $("#search-input").addEventListener("input", render);
+    $("#sort-by").addEventListener("change", (ev) => {
+      state.sortBy = ev.target.value;
+      try { localStorage.setItem("sort33", state.sortBy); } catch (_) {}
+      render();
+    });
     document.querySelectorAll(".segments [data-scope]").forEach((b) =>
       b.addEventListener("click", () => {
         state.scope = b.dataset.scope;
@@ -1670,8 +1726,8 @@
         document.querySelectorAll("[data-addmode]").forEach((x) => x.classList.toggle("active", x === b));
         applyAddMode();
       }));
-    $("#add-form").artist.addEventListener("input", checkDup);
-    $("#add-form").title.addEventListener("input", checkDup);
+    $("#add-form").artist.addEventListener("input", () => { checkDup(); autoGenre(); });
+    $("#add-form").title.addEventListener("input", () => { checkDup(); autoGenre(); });
     $("#add-form").price.addEventListener("input", updateCost);
     $("#add-form").currency.addEventListener("input", updateCost);
     $("#add-form").date.addEventListener("change", updateCost); // purchase date drives the rate
@@ -1741,6 +1797,9 @@
     const ver = $("#app-version");
     if (ver) ver.textContent = "v" + APP_VERSION;
     state.sheetId = localStorage.getItem("sheetId33") || CONFIG_SHEET || "";
+    state.sortBy = localStorage.getItem("sort33") || "artist";
+    const sortSel = $("#sort-by");
+    if (sortSel) sortSel.value = state.sortBy;
     wire();
     applySettings(); // populate form labels with defaults until settings load
     if ("serviceWorker" in navigator) {
