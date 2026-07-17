@@ -150,26 +150,37 @@
   <section id="sheet-modal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="sheet-modal-title">
     <div class="sheet-handle" aria-hidden="true"></div>
     <h2 id="sheet-modal-title" class="sheet-title">Setup</h2>
-    <p class="sheet-help">Point the app at your Google Sheet, then say which tab is your collection
-      and which is your wishlist. Sign in as an account that can open it.</p>
     <form id="sheet-form" class="form" novalidate>
+      <!-- Step 1: the file -->
+      <p class="setup-step">Step 1 — your sheet</p>
       <label>Sheet URL or ID
         <input name="sheeturl" autocomplete="off" placeholder="https://docs.google.com/spreadsheets/d/…" />
       </label>
-      <button type="button" id="sheet-loadtabs" class="btn">Load tabs</button>
+      <label class="setup-check"><input type="checkbox" id="setup-file-ok" /> This is my sheet — load its tabs</label>
+
+      <!-- Step 2: the tabs -->
       <div id="sheet-tabs" class="hidden">
+        <p class="setup-step">Step 2 — your tabs</p>
         <div class="grid2">
           <label>Collection tab<select id="setup-collection"></select></label>
           <label>Wishlist tab<select id="setup-wishlist"></select></label>
         </div>
+        <label class="setup-check"><input type="checkbox" id="setup-tabs-ok" /> These are the right tabs — map their columns</label>
       </div>
+
+      <!-- Step 3: map each tab -->
       <div id="setup-map" class="hidden">
-        <h3 class="admin-subhead">Map your columns</h3>
-        <p class="sheet-help">Match each app field to a column in your collection tab. <b>Artist</b> and
-          <b>Album Name</b> are required; leave the rest as “(not in my file)” if you don't have them.
-          Some — genre, year released, label — can be filled from the internet later.</p>
+        <p class="setup-step">Step 3 — map columns</p>
+        <p class="sheet-help">Match each app field to one of your columns. <b>Artist</b> and <b>Album Name</b>
+          are required for each tab; leave the rest as “(not in my file).”
+          Genre, Year Released and Label can be filled from the internet later.</p>
+        <h3 class="admin-subhead">Collection tab</h3>
         <div id="setup-map-fields" class="setup-map-fields"></div>
+        <h3 class="admin-subhead">Wishlist tab</h3>
+        <div id="setup-wmap-fields" class="setup-map-fields"></div>
+        <label class="setup-check"><input type="checkbox" id="setup-rename" /> Also rename my columns to these tidy names in the sheet</label>
       </div>
+
       <p id="sheet-error" class="dup hidden"></p>
       <div class="form-actions">
         <button type="button" id="sheet-cancel" class="btn">Cancel</button>

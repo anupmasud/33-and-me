@@ -158,7 +158,10 @@ button { font-family: inherit; }
 .field-hint { color: var(--sleeve-dim); font-weight: 400; font-size: 12px; }
 .form input[readonly] { opacity: .65; cursor: default; }
 .field-hidden { display: none !important; }
-.setup-map-fields { max-height: 42vh; overflow-y: auto; }
+.setup-step { color: var(--gold); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin: 14px 0 6px; }
+.setup-check { display: flex; align-items: center; gap: 8px; color: var(--sleeve); font-size: 14px; margin-top: 10px; cursor: pointer; }
+.setup-check input { width: 18px; height: 18px; accent-color: var(--gold); }
+.setup-map-fields { max-height: 30vh; overflow-y: auto; }
 .setup-map-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
 .setup-map-row > span { flex: 0 0 42%; color: var(--sleeve-dim); font-size: 13px; }
 .setup-map-row select { flex: 1; }

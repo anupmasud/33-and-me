@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "31";
+  const APP_VERSION = "32";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -119,7 +119,8 @@
     preferredCurrency: "USD",
     collectionTab: "",   // "" = first non-app tab
     wishlistTab: "",     // "" = "Wishlist" (created if absent)
-    map: {},             // app field key -> the user's actual column header
+    map: {},             // collection: app field key -> user's column header
+    wishMap: {},         // wishlist:   app field key -> user's column header
     hidden: {},          // field key -> true means exclude from form + detail
     defaults: {},        // field key -> value prefilled when adding
     wish: { artist: true, title: true, genre: true, notes: true }, // fields on the wishlist
@@ -138,12 +139,14 @@
   const hiddenOf = (key) => !CORE_FIELDS.includes(key) && !!(SETTINGS.hidden && SETTINGS.hidden[key]);
   const defaultOf = (key) => (SETTINGS.defaults && SETTINGS.defaults[key]) || "";
   const onWish = (key) => !!(SETTINGS.wish && SETTINGS.wish[key]);
-  // Column resolution: a user's mapping wins; otherwise the app's own header.
-  // Empty map ⇒ identity ⇒ existing sheets behave exactly as before.
-  const mapped = (key) => (SETTINGS.map && SETTINGS.map[key]) || "";
-  const colName = (key) => mapped(key) || FIELD_COLS[key] || key;                 // collection tab
-  const wishColName = (key) => mapped(key) || WISH_COL[key] || FIELD_COLS[key] || key; // wishlist tab
+  // Column resolution: a user's per-tab mapping wins; otherwise the app's own
+  // header. Empty map ⇒ identity ⇒ existing sheets behave exactly as before.
+  const mapped = (key) => (SETTINGS.map && SETTINGS.map[key]) || "";        // collection map
+  const mappedW = (key) => (SETTINGS.wishMap && SETTINGS.wishMap[key]) || ""; // wishlist map
+  const colName = (key) => mapped(key) || FIELD_COLS[key] || key;                    // collection tab
+  const wishColName = (key) => mappedW(key) || WISH_COL[key] || FIELD_COLS[key] || key; // wishlist tab
   const isMapped = () => SETTINGS.map && Object.keys(SETTINGS.map).length > 0;
+  const isWishMapped = () => SETTINGS.wishMap && Object.keys(SETTINGS.wishMap).length > 0;
   // Never hand back an empty list: an empty/missing saved list would silently
   // wipe the sheet's dropdown, so fall back to the built-in defaults.
   const listOf = (key) => {
@@ -318,8 +321,8 @@
       });
       if (!wh.includes("Added")) need.push("Added");
       // With a mapping, use the user's wishlist columns as-is (don't append).
-      if ((need.length && !isMapped()) || !wh.length) {
-        wh = wh.concat(isMapped() ? [] : need);
+      if ((need.length && !isWishMapped()) || !wh.length) {
+        wh = wh.concat(isWishMapped() ? [] : need);
         await api("/values/" + q(`${wt}!1:1`) + "?valueInputOption=USER_ENTERED", {
           method: "PUT", body: JSON.stringify({ values: [wh] }),
         });
@@ -680,6 +683,7 @@
           collectionTab: p.collectionTab || "",
           wishlistTab: p.wishlistTab || "",
           map: { ...(p.map || {}) },
+          wishMap: { ...(p.wishMap || {}) },
           v: p.v || 1,
         };
         // Migration: settings saved before Currency/Date/Condition were made
@@ -1951,7 +1955,6 @@
         `<option value="${NEW_WISHLIST}" ${curWish ? "" : "selected"}>— create a “Wishlist” tab —</option>`;
       $("#sheet-tabs").classList.remove("hidden");
       err.classList.add("hidden");
-      await loadMapFields(id);
       return true;
     } catch (e) {
       $("#sheet-tabs").classList.add("hidden");
@@ -1973,28 +1976,39 @@
     return (d.values && d.values[0]) || [];
   }
 
-  function renderMapFields(columns) {
-    const wants = (key) => [FIELD_COLS[key], WISH_COL[key], labelOf(key)].filter(Boolean).map(norm);
+  // Render one tab's mapping rows into `container`, pre-selecting the current
+  // map or an auto-match against the tab's columns.
+  function renderMapFields(container, columns, currentMap, attr) {
     const auto = (key) => {
-      const w = wants(key);
+      const w = [FIELD_COLS[key], WISH_COL[key], labelOf(key)].filter(Boolean).map(norm);
       return columns.find((c) => w.includes(norm(c))) || "";
     };
-    $("#setup-map-fields").innerHTML = FIELD_DEFS.map((fd) => {
-      const cur = (SETTINGS.map && SETTINGS.map[fd.key]) || auto(fd.key);
+    $(container).innerHTML = FIELD_DEFS.map((fd) => {
+      const cur = (currentMap && currentMap[fd.key]) || auto(fd.key);
       const req = CORE_FIELDS.includes(fd.key);
       const opts = `<option value="">${req ? "— required —" : "(not in my file)"}</option>` +
         columns.map((c) => `<option value="${esc(c)}" ${sameName(c, cur) ? "selected" : ""}>${esc(c)}</option>`).join("");
       return `<label class="setup-map-row"><span>${esc(labelOf(fd.key))}${req ? ' <span class="req-star">*</span>' : ""}</span>
-        <select data-map="${fd.key}">${opts}</select></label>`;
+        <select ${attr}="${fd.key}">${opts}</select></label>`;
     }).join("");
-    $("#setup-map").classList.remove("hidden");
   }
 
-  async function loadMapFields(id) {
+  async function loadCollectionMap(id) {
     const tab = $("#setup-collection").value;
-    if (!tab) { $("#setup-map").classList.add("hidden"); return; }
+    const cols = tab ? await fetchHeader(id, tab).catch(() => []) : [];
+    renderMapFields("#setup-map-fields", cols, SETTINGS.map, "data-map");
+  }
+
+  async function loadWishlistMap(id) {
+    const tab = $("#setup-wishlist").value;
+    const wrap = $("#setup-wmap-fields").closest ? $("#setup-wmap-fields") : null;
+    if (!tab || tab === NEW_WISHLIST) {
+      // No existing wishlist to map (a fresh one uses the app's tidy names).
+      $("#setup-wmap-fields").innerHTML = `<p class="sheet-help">A new Wishlist tab will be created with the app's standard columns.</p>`;
+      return;
+    }
     const cols = await fetchHeader(id, tab).catch(() => []);
-    renderMapFields(cols);
+    renderMapFields("#setup-wmap-fields", cols, SETTINGS.wishMap, "data-wmap");
   }
 
   function openSheetModal(firstRun) {
@@ -2002,12 +2016,14 @@
     $("#sheet-error").classList.add("hidden");
     $("#sheet-tabs").classList.add("hidden");
     $("#setup-map").classList.add("hidden");
+    $("#setup-file-ok").checked = false;
+    $("#setup-tabs-ok").checked = false;
+    $("#setup-rename").checked = false;
     form.sheeturl.value = state.sheetId ? sheetUrl(state.sheetId) : "";
     // On mandatory first run (no sheet yet) there's nothing to cancel back to.
     $("#sheet-cancel").classList.toggle("hidden", !!firstRun && !state.sheetId);
     $("#sheet-modal").classList.remove("hidden");
     $("#sheet-backdrop").classList.remove("hidden");
-    if (state.sheetId) loadSetupTabs(state.sheetId); // prefill the tab pickers
     setTimeout(() => form.sheeturl.focus(), 60);
   }
 
@@ -2016,41 +2032,87 @@
     if ($("#add-sheet").classList.contains("hidden")) $("#sheet-backdrop").classList.add("hidden");
   }
 
-  // Apply the chosen sheet + tabs, then reload the app.
+  // Rename the mapped columns' headers to the app's tidy names in the sheet,
+  // and return the resulting identity map. Best-effort per column.
+  async function tidyHeaders(id, tab, map, canonical) {
+    const cols = await fetchHeader(id, tab).catch(() => []);
+    const idx = {}; cols.forEach((c, i) => { idx[norm(c)] = i; });
+    const out = {};
+    for (const [key, userCol] of Object.entries(map)) {
+      const nice = canonical(key);
+      out[key] = nice;
+      if (sameName(userCol, nice)) continue; // already tidy
+      const i = idx[norm(userCol)];
+      if (i === undefined) continue;
+      await api2(id, "/values/" + q(`'${tab}'!${colLetter(i)}1`) + "?valueInputOption=USER_ENTERED",
+        { method: "PUT", body: JSON.stringify({ values: [[nice]] }) }).catch(() => {});
+    }
+    return out;
+  }
+
+  // Like api() but against an explicit spreadsheet id (setup may target a sheet
+  // we haven't switched to yet).
+  async function api2(id, path, opts) {
+    const token = await getToken(false).catch(() => getToken(true));
+    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}${path}`, {
+      ...opts, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", ...(opts.headers || {}) },
+    });
+    if (!res.ok) throw new Error("Sheets API " + res.status);
+    return res.json();
+  }
+
+  // Apply the chosen sheet + tabs + mappings, then reload the app.
   async function applySetup(id) {
+    const err = $("#sheet-error");
+    const tabsShown = !$("#sheet-tabs").classList.contains("hidden");
+    const mapShown = !$("#setup-map").classList.contains("hidden");
+
+    // Collect the two mappings from the form.
+    const collect = (attr) => {
+      const m = {};
+      document.querySelectorAll(`#setup-map .setup-map-row [${attr}]`).forEach((sel) => {
+        if (sel.value) m[sel.dataset[attr === "data-map" ? "map" : "wmap"]] = sel.value;
+      });
+      return m;
+    };
+    let map = collect("data-map"), wishMap = collect("data-wmap");
+    const wishVal = tabsShown ? $("#setup-wishlist").value : "";
+    const wishIsNew = wishVal === NEW_WISHLIST || wishVal === "";
+
+    if (mapShown) {
+      if (!map.artist || !map.title) {
+        err.textContent = "Collection: map both Artist and Album Name."; err.classList.remove("hidden"); return;
+      }
+      if (!wishIsNew && (!wishMap.artist || !wishMap.title)) {
+        err.textContent = "Wishlist: map both Artist and Album Name (or create a new Wishlist tab)."; err.classList.remove("hidden"); return;
+      }
+    }
+
     const switching = id !== state.sheetId;
     if (switching) {
       state.sheetId = id;
       localStorage.setItem("sheetId33", id);
       state.collectionSheet = null; state.wishlistSheet = null;
       state.collection = []; state.wishlist = [];
-      await loadSettings().catch(() => {}); // adopt the new sheet's own settings
+      await loadSettings().catch(() => {});
     }
-    const tabsShown = !$("#sheet-tabs").classList.contains("hidden");
-    if (tabsShown) {
-      // Collect the field → column mapping.
-      const map = {};
-      document.querySelectorAll("#setup-map-fields [data-map]").forEach((sel) => {
-        if (sel.value) map[sel.dataset.map] = sel.value;
-      });
-      const mapShown = !$("#setup-map").classList.contains("hidden");
-      if (mapShown && (!map.artist || !map.title)) {
-        const err = $("#sheet-error");
-        err.textContent = "Map both Artist and Album Name — the app needs them.";
-        err.classList.remove("hidden");
-        return; // keep the modal open
-      }
-      const wish = $("#setup-wishlist").value;
-      SETTINGS.collectionTab = $("#setup-collection").value || "";
-      SETTINGS.wishlistTab = wish === NEW_WISHLIST ? "" : wish;
-      if (mapShown) SETTINGS.map = map;
-    }
-    closeSheetModal();
+
     setBusy(true);
     try {
-      if (tabsShown) await saveSettings();
+      if (mapShown && $("#setup-rename").checked) {
+        // Rewrite the users' headers to the tidy app names, then map = identity.
+        map = await tidyHeaders(id, $("#setup-collection").value, map, (k) => FIELD_COLS[k] || k);
+        if (!wishIsNew) wishMap = await tidyHeaders(id, wishVal, wishMap, (k) => WISH_COL[k] || FIELD_COLS[k] || k);
+      }
+      if (tabsShown) {
+        SETTINGS.collectionTab = $("#setup-collection").value || "";
+        SETTINGS.wishlistTab = wishIsNew ? "" : wishVal;
+      }
+      if (mapShown) { SETTINGS.map = map; SETTINGS.wishMap = wishIsNew ? {} : wishMap; }
+      closeSheetModal();
+      if (tabsShown || mapShown) await saveSettings();
     } catch (_) {
-      toast("Saved locally, but couldn't write settings to the sheet");
+      toast("Saved locally, but couldn't write everything to the sheet");
     } finally { setBusy(false); }
     showApp();
   }
@@ -2111,14 +2173,25 @@
       }
       return id;
     };
-    $("#sheet-loadtabs").addEventListener("click", async () => {
+    const setupId = () => parseSheetId($("#sheet-form").sheeturl.value);
+    // Step 1 → 2: confirm the file, load its tabs.
+    $("#setup-file-ok").addEventListener("change", async (ev) => {
+      if (!ev.target.checked) { $("#sheet-tabs").classList.add("hidden"); $("#setup-map").classList.add("hidden"); return; }
       const id = setupSheetId();
-      if (id) await loadSetupTabs(id);
+      if (!id) { ev.target.checked = false; return; }
+      await loadSetupTabs(id);
     });
-    $("#setup-collection").addEventListener("change", () => {
-      const id = parseSheetId($("#sheet-form").sheeturl.value);
-      if (id) loadMapFields(id); // re-map when the collection tab changes
+    // Step 2 → 3: confirm the tabs, map each tab's columns.
+    $("#setup-tabs-ok").addEventListener("change", async (ev) => {
+      if (!ev.target.checked) { $("#setup-map").classList.add("hidden"); return; }
+      const id = setupId();
+      if (!id) { ev.target.checked = false; return; }
+      await loadCollectionMap(id);
+      await loadWishlistMap(id);
+      $("#setup-map").classList.remove("hidden");
     });
+    $("#setup-collection").addEventListener("change", () => { const id = setupId(); if (id && $("#setup-tabs-ok").checked) loadCollectionMap(id); });
+    $("#setup-wishlist").addEventListener("change", () => { const id = setupId(); if (id && $("#setup-tabs-ok").checked) loadWishlistMap(id); });
     $("#sheet-form").addEventListener("submit", (ev) => {
       ev.preventDefault();
       const id = setupSheetId();
