@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "26";
+  const APP_VERSION = "27";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -1620,30 +1620,84 @@
     return syn && list.includes(syn) ? syn : "";
   }
 
+  // MusicBrainz asks for ~1 request/second — space calls out so bulk runs don't
+  // get throttled (they answer 503 and we'd lose the good genres).
+  let mbLast = 0;
+  async function mbFetch(url) {
+    const wait = Math.max(0, 1100 - (Date.now() - mbLast));
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    mbLast = Date.now();
+    return fetch(url).then((r) => r.json());
+  }
+
   // MusicBrainz first (its tags match this taxonomy far better), iTunes as a
   // fallback (it finds more, but flattens world music into "Worldwide").
   async function lookupGenre(artist, album) {
-    const j = (url) => fetch(url).then((r) => r.json());
     try {
       const q = encodeURIComponent(`artist:"${artist}" AND releasegroup:"${album}"`);
-      const s = await j(`https://musicbrainz.org/ws/2/release-group?query=${q}&fmt=json&limit=1`);
+      const s = await mbFetch(`https://musicbrainz.org/ws/2/release-group?query=${q}&fmt=json&limit=1`);
       const rg = (s["release-groups"] || [])[0];
       if (rg) {
-        const g = await j(`https://musicbrainz.org/ws/2/release-group/${rg.id}?fmt=json&inc=genres+artist-credits`);
+        const g = await mbFetch(`https://musicbrainz.org/ws/2/release-group/${rg.id}?fmt=json&inc=genres+artist-credits`);
         const byCount = (arr) => (arr || []).slice().sort((a, b) => (b.count || 0) - (a.count || 0)).map((x) => x.name);
         let names = byCount(g.genres);
         if (!names.length) { // fall back to the artist's own tags
           const aid = g["artist-credit"] && g["artist-credit"][0] && g["artist-credit"][0].artist.id;
-          if (aid) names = byCount((await j(`https://musicbrainz.org/ws/2/artist/${aid}?fmt=json&inc=genres`)).genres);
+          if (aid) names = byCount((await mbFetch(`https://musicbrainz.org/ws/2/artist/${aid}?fmt=json&inc=genres`)).genres);
         }
         for (const raw of names) { const m = mapGenre(raw); if (m) return m; }
       }
     } catch (_) { /* fall through to iTunes */ }
     try {
-      const d = await j(`https://itunes.apple.com/search?term=${encodeURIComponent(artist + " " + album)}&entity=album&limit=1`);
+      const d = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artist + " " + album)}&entity=album&limit=1`).then((r) => r.json());
       if (d.resultCount) return mapGenre(d.results[0].primaryGenreName);
     } catch (_) {}
     return "";
+  }
+
+  // Genre for one artist/album: your own collection first (your tags are more
+  // granular), then online. Returns "" if nothing confident is found.
+  async function genreFor(artist, album) {
+    const a = norm(artist), t = norm(album);
+    if (!a) return "";
+    const hit =
+      (t && state.collection.find((i) => i.genre && norm(i.artist) === a && norm(i.title) === t)) ||
+      state.collection.find((i) => i.genre && norm(i.artist) === a);
+    if (hit) return hit.genre;
+    return lookupGenre(artist, album).catch(() => "");
+  }
+
+  // Fill blank genres on the wishlist. These are albums you don't own, so most
+  // need the online lookup — hence the throttling and the progress toasts.
+  async function fillWishlistGenres() {
+    if (!state.wishlistSheet) return toast("No wishlist tab found");
+    const blanks = state.wishlist.filter((w) => !(w.genre || "").trim() && (w.artist || "").trim());
+    if (!blanks.length) return toast("No blank genres on the wishlist");
+    if (!confirm(`Look up genres for ${blanks.length} wishlist item${blanks.length > 1 ? "s" : ""}?\n\nThis is rate-limited to about 1/second, so it may take ~${Math.ceil(blanks.length * 2.5 / 60)} min. Existing genres are never touched.`)) return;
+
+    const t = state.wishlistSheet.title;
+    const data = [];
+    let missed = 0;
+    setBusy(true);
+    try {
+      for (let i = 0; i < blanks.length; i++) {
+        const w = blanks[i];
+        const g = await genreFor(w.artist, w.title);
+        if (g) data.push({ range: `${t}!C${w.row}`, values: [[g]] }); // C = Genre
+        else missed++;
+        if (i % 5 === 4) toast(`Looking up genres… ${i + 1}/${blanks.length}`, 4000);
+      }
+      if (!data.length) return toast(`No genres found for those ${blanks.length} wishes`);
+      await api("/values:batchUpdate", {
+        method: "POST",
+        body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+      });
+      await loadData(); render();
+      toast(`Filled ${data.length} wishlist genres ✓` + (missed ? ` (${missed} not found)` : ""), 5000);
+    } catch (e) {
+      console.error("33&Me: wishlist genre fill failed:", e);
+      toast("Couldn't fill wishlist genres — are you online?");
+    } finally { setBusy(false); }
   }
 
   // Debounced online lookup, only once the collection has nothing to offer.
@@ -1820,6 +1874,7 @@
     $("#admin-save").addEventListener("click", saveAdmin);
     $("#admin-reset").addEventListener("click", () => renderAdmin(defaultSettings()));
     $("#admin-recompute").addEventListener("click", () => { closeAdmin(); recomputeCosts(); });
+    $("#admin-fill-wish").addEventListener("click", () => { closeAdmin(); fillWishlistGenres(); });
     $("#sheet-backdrop").addEventListener("click", () => {
       closeSheet();
       closeDetail();
