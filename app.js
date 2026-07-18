@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "33";
+  const APP_VERSION = "34";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -2226,6 +2226,16 @@
     });
     $("#setup-collection").addEventListener("change", () => { const id = setupId(); if (id && $("#setup-tabs-ok").checked) loadCollectionMap(id); });
     $("#setup-wishlist").addEventListener("change", () => { const id = setupId(); if (id && $("#setup-tabs-ok").checked) loadWishlistMap(id); });
+    $("#setup-automatch").addEventListener("click", async () => {
+      const id = setupId(); if (!id) return;
+      const ccols = await fetchHeader(id, $("#setup-collection").value).catch(() => []);
+      renderMapFields("#setup-map-fields", ccols, {}, "data-map"); // {} ⇒ fresh auto-match by name
+      const wv = $("#setup-wishlist").value;
+      if (wv && wv !== NEW_WISHLIST) {
+        const wcols = await fetchHeader(id, wv).catch(() => []);
+        renderMapFields("#setup-wmap-fields", wcols, {}, "data-wmap");
+      }
+    });
     $("#sheet-form").addEventListener("submit", (ev) => {
       ev.preventDefault();
       const id = setupSheetId();
