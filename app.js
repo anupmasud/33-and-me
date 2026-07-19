@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "36";
+  const APP_VERSION = "37";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -1876,28 +1876,49 @@
 
   // MusicBrainz first (its tags match this taxonomy far better), iTunes as a
   // fallback (it finds more, but flattens world music into "Worldwide").
-  async function lookupGenre(artist, album) {
+  // Fetch what we can about an album: genre (mapped), original release year, and
+  // record label. `need` limits the calls to what's actually blank. MusicBrainz
+  // has all three; iTunes fills genre/year when MB comes up short (no label).
+  async function lookupAlbum(artist, album, need) {
+    need = need || { genre: true, yearReleased: true, label: true };
+    const out = { genre: "", yearReleased: "", label: "" };
     try {
       const q = encodeURIComponent(`artist:"${artist}" AND releasegroup:"${album}"`);
       const s = await mbFetch(`https://musicbrainz.org/ws/2/release-group?query=${q}&fmt=json&limit=1`);
       const rg = (s["release-groups"] || [])[0];
       if (rg) {
-        const g = await mbFetch(`https://musicbrainz.org/ws/2/release-group/${rg.id}?fmt=json&inc=genres+artist-credits`);
-        const byCount = (arr) => (arr || []).slice().sort((a, b) => (b.count || 0) - (a.count || 0)).map((x) => x.name);
-        let names = byCount(g.genres);
-        if (!names.length) { // fall back to the artist's own tags
-          const aid = g["artist-credit"] && g["artist-credit"][0] && g["artist-credit"][0].artist.id;
-          if (aid) names = byCount((await mbFetch(`https://musicbrainz.org/ws/2/artist/${aid}?fmt=json&inc=genres`)).genres);
+        if (need.yearReleased && rg["first-release-date"]) out.yearReleased = String(rg["first-release-date"]).slice(0, 4);
+        const inc = "genres+artist-credits" + (need.label ? "+releases" : "");
+        const g = await mbFetch(`https://musicbrainz.org/ws/2/release-group/${rg.id}?fmt=json&inc=${inc}`);
+        if (need.genre) {
+          const byCount = (arr) => (arr || []).slice().sort((a, b) => (b.count || 0) - (a.count || 0)).map((x) => x.name);
+          let names = byCount(g.genres);
+          if (!names.length) {
+            const aid = g["artist-credit"] && g["artist-credit"][0] && g["artist-credit"][0].artist.id;
+            if (aid) names = byCount((await mbFetch(`https://musicbrainz.org/ws/2/artist/${aid}?fmt=json&inc=genres`)).genres);
+          }
+          for (const raw of names) { const m = mapGenre(raw); if (m) { out.genre = m; break; } }
         }
-        for (const raw of names) { const m = mapGenre(raw); if (m) return m; }
+        if (need.label && (g.releases || []).length) {
+          const r = await mbFetch(`https://musicbrainz.org/ws/2/release/${g.releases[0].id}?fmt=json&inc=labels`);
+          const li = (r["label-info"] || []).map((x) => x.label && x.label.name).filter(Boolean);
+          if (li.length) out.label = li[0];
+        }
       }
     } catch (_) { /* fall through to iTunes */ }
-    try {
-      const d = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artist + " " + album)}&entity=album&limit=1`).then((r) => r.json());
-      if (d.resultCount) return mapGenre(d.results[0].primaryGenreName);
-    } catch (_) {}
-    return "";
+    if ((need.genre && !out.genre) || (need.yearReleased && !out.yearReleased)) {
+      try {
+        const d = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artist + " " + album)}&entity=album&limit=1`).then((r) => r.json());
+        if (d.resultCount) {
+          const res = d.results[0];
+          if (need.genre && !out.genre) out.genre = mapGenre(res.primaryGenreName);
+          if (need.yearReleased && !out.yearReleased && res.releaseDate) out.yearReleased = String(res.releaseDate).slice(0, 4);
+        }
+      } catch (_) {}
+    }
+    return out;
   }
+  const lookupGenre = (artist, album) => lookupAlbum(artist, album, { genre: true }).then((r) => r.genre);
 
   // Genre for one artist/album: your own collection first (your tags are more
   // granular), then online. Returns "" if nothing confident is found.
@@ -1950,17 +1971,26 @@
     clearTimeout(genreTimer);
     genreTimer = setTimeout(async () => {
       const f = $("#add-form");
-      if (!f.genre || f.genre.value.trim()) return;
       const artist = f.artist.value.trim(), album = f.title.value.trim();
       if (!artist || !album) return;
+      // Only look up fields that are blank AND visible in the current mode.
+      const wish = state.addMode === "wish";
+      const canFill = (k) => wish ? onWish(k) : !hiddenOf(k);
+      const need = {};
+      ["genre", "yearReleased", "label"].forEach((k) => {
+        if (f[k] && !f[k].value.trim() && canFill(k)) need[k] = true;
+      });
+      if (!Object.keys(need).length) return;
       const seq = ++genreSeq;
-      const g = await lookupGenre(artist, album).catch(() => "");
+      const r = await lookupAlbum(artist, album, need).catch(() => ({}));
       if (seq !== genreSeq) return;            // superseded by newer typing
       const ff = $("#add-form");
-      if (g && ff.genre && !ff.genre.value.trim()) {
-        ff.genre.value = g;
-        toast(`Genre looked up: ${g}`);
-      }
+      const labels = { genre: "genre", yearReleased: "year released", label: "label" };
+      const filled = [];
+      Object.keys(need).forEach((k) => {
+        if (r[k] && ff[k] && !ff[k].value.trim()) { ff[k].value = r[k]; filled.push(labels[k]); }
+      });
+      if (filled.length) toast("Looked up: " + filled.join(", "));
     }, 800);
   }
 
