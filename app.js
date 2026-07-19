@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "34";
+  const APP_VERSION = "35";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -806,6 +806,7 @@
     const cl = $("#cost-label");
     if (cl) cl.textContent = costColName();
     updateFormFields(); // field-hidden is driven here (mode + hidden/wish settings)
+    renderSortOptions(); // enabling/hiding fields changes what you can sort by
   }
 
   // First required field (record mode) left empty → its label, else null.
@@ -1583,6 +1584,30 @@
     } finally { setBusy(false); }
   }
 
+  // ---------- sort options (scope-aware) ----------
+  // Sortable keys in display order. "listens"/"lastListened" are app-managed and
+  // collection-only; the rest are configurable fields.
+  const SORT_FIELDS = ["artist", "title", "genre", "label", "yearReleased", "format",
+    "condition", "year", "location", "city", "country", "listens", "lastListened"];
+  const sortLabel = (k) => k === "listens" ? "Listen count" : k === "lastListened" ? "Last listened" : labelOf(k);
+  const inCollectionSort = (k) => (k === "listens" || k === "lastListened") ? true : !hiddenOf(k);
+  const inWishlistSort = (k) => (k === "listens" || k === "lastListened") ? false : onWish(k);
+  function sortableFields(scope) {
+    return SORT_FIELDS.filter((k) => {
+      if (scope === "collection") return inCollectionSort(k);
+      if (scope === "wishlist") return inWishlistSort(k);
+      return inCollectionSort(k) && inWishlistSort(k); // "all" → only fields common to both
+    });
+  }
+  function renderSortOptions() {
+    const sel = $("#sort-by");
+    if (!sel) return;
+    const keys = sortableFields(state.scope);
+    sel.innerHTML = keys.map((k) => `<option value="${k}">${esc(sortLabel(k))}</option>`).join("");
+    if (!keys.includes(state.sortBy)) state.sortBy = keys[0] || "artist";
+    sel.value = state.sortBy;
+  }
+
   // ---------- search & render ----------
   function matches(item, terms) {
     const hay = norm(item.artist + " " + item.title + " " + item.genre);
@@ -2251,6 +2276,7 @@
       b.addEventListener("click", () => {
         state.scope = b.dataset.scope;
         document.querySelectorAll("[data-scope]").forEach((x) => x.classList.toggle("active", x === b));
+        renderSortOptions(); // sort choices depend on the active tab
         render();
       }));
     $("#add-btn").addEventListener("click", () => openSheet("record"));
@@ -2364,9 +2390,8 @@
     if (ver) ver.textContent = "v" + APP_VERSION;
     state.sheetId = localStorage.getItem("sheetId33") || CONFIG_SHEET || "";
     state.sortBy = localStorage.getItem("sort33") || "artist";
-    const sortSel = $("#sort-by");
-    if (sortSel) sortSel.value = state.sortBy;
     wire();
+    renderSortOptions(); // scope-aware sort choices (default scope = "all")
     applySettings(); // populate form labels with defaults until settings load
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});
