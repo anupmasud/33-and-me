@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "37";
+  const APP_VERSION = "38";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -1965,6 +1965,64 @@
     } finally { setBusy(false); }
   }
 
+  // Backfill missing Genre / Year Released / Label across the collection and
+  // wishlist from the internet. Only blank cells whose column exists (and, on
+  // the wishlist, is enabled) are touched. Rate-limited to ~1 request/second.
+  async function fillAlbumInfo() {
+    const a1 = (tab, col, row) => "'" + String(tab).replace(/'/g, "''") + "'!" + col + row;
+    const FIELDS = ["genre", "yearReleased", "label"];
+    const jobs = [];
+    state.collection.forEach((rec) => {
+      if (!rec.artist || !rec.title) return;
+      const need = {};
+      FIELDS.forEach((k) => {
+        const idx = state.col[colName(k)];
+        if (idx !== undefined && !String(rec[k] || "").trim()) need[k] = true;
+      });
+      if (Object.keys(need).length) jobs.push({ tab: state.collectionSheet.title, cols: state.col, colFor: colName, rec, need });
+    });
+    if (state.wishlistSheet) {
+      state.wishlist.forEach((rec) => {
+        if (!rec.artist || !rec.title) return;
+        const need = {};
+        FIELDS.forEach((k) => {
+          if (!onWish(k)) return;
+          const idx = state.wishCol[wishColName(k)];
+          if (idx !== undefined && !String(rec[k] || "").trim()) need[k] = true;
+        });
+        if (Object.keys(need).length) jobs.push({ tab: state.wishlistSheet.title, cols: state.wishCol, colFor: wishColName, rec, need });
+      });
+    }
+    if (!jobs.length) return toast("No missing album info to fill");
+    if (!confirm(`Look up missing genre / year released / label for ${jobs.length} record${jobs.length > 1 ? "s" : ""} (collection + wishlist)?\n\nRate-limited to ~1/second, so it may take ~${Math.ceil(jobs.length * 3 / 60)} min. Existing values are never touched.`)) return;
+
+    const data = [];
+    let filled = 0, missed = 0;
+    setBusy(true);
+    try {
+      for (let i = 0; i < jobs.length; i++) {
+        const j = jobs[i];
+        const r = await lookupAlbum(j.rec.artist, j.rec.title, j.need).catch(() => ({}));
+        let any = false;
+        FIELDS.forEach((k) => {
+          if (!j.need[k] || !r[k]) return;
+          const idx = j.cols[j.colFor(k)];
+          data.push({ range: a1(j.tab, colLetter(idx), j.rec.row), values: [[r[k]]] });
+          filled++; any = true;
+        });
+        if (!any) missed++;
+        if (i % 5 === 4) toast(`Looking up… ${i + 1}/${jobs.length}`, 4000);
+      }
+      if (!data.length) return toast("Nothing found for those records");
+      await api("/values:batchUpdate", { method: "POST", body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }) });
+      await loadData(); render();
+      toast(`Filled ${filled} field${filled > 1 ? "s" : ""} ✓` + (missed ? ` (${missed} not found)` : ""), 5000);
+    } catch (e) {
+      console.error("33&Me: fill album info failed:", e);
+      toast("Couldn't fill — are you online?");
+    } finally { setBusy(false); }
+  }
+
   // Debounced online lookup, only once the collection has nothing to offer.
   let genreTimer = null, genreSeq = 0;
   function scheduleGenreLookup() {
@@ -2265,7 +2323,7 @@
       catch (e) { err.textContent = "Sign-in didn't complete. Try again."; err.classList.remove("hidden"); }
     });
     $("#signout-btn").addEventListener("click", signOut);
-    $("#fill-genres-btn").addEventListener("click", fillGenres);
+    $("#fill-genres-btn").addEventListener("click", fillAlbumInfo);
     $("#sheet-btn").addEventListener("click", () => openSheetModal(false));
     $("#refresh-btn").addEventListener("click", showApp);
 
@@ -2351,7 +2409,6 @@
     $("#admin-save").addEventListener("click", saveAdmin);
     $("#admin-reset").addEventListener("click", () => renderAdmin(defaultSettings()));
     $("#admin-recompute").addEventListener("click", () => { closeAdmin(); recomputeCosts(); });
-    $("#admin-fill-wish").addEventListener("click", () => { closeAdmin(); fillWishlistGenres(); });
     $("#admin-setup").addEventListener("click", () => { closeAdmin(); openSheetModal(false); });
     $("#sheet-backdrop").addEventListener("click", () => {
       closeSheet();
