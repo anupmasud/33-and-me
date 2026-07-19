@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "38";
+  const APP_VERSION = "39";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -343,9 +343,10 @@
         if (onWish(fd.key) && !wh.includes(wishColName(fd.key))) need.push(wishColName(fd.key));
       });
       if (!wh.includes("Added")) need.push("Added");
-      // With a mapping (or view-only access), use the user's columns as-is.
-      if (state.canWrite && ((need.length && !isWishMapped()) || !wh.length)) {
-        wh = wh.concat(isWishMapped() ? [] : need);
+      // Create a column for every enabled wishlist field that's missing (by its
+      // mapped/standard name). Skipped only for view-only access.
+      if (state.canWrite && need.length) {
+        wh = wh.concat([...new Set(need)]);
         await api("/values/" + q(`${wt}!1:1`) + "?valueInputOption=USER_ENTERED", {
           method: "PUT", body: JSON.stringify({ values: [wh] }),
         });
@@ -456,15 +457,24 @@
       console.error("33&Me: cost column setup failed:", e);
     }
 
-    const missing = APP_COLUMNS.filter((h) => !headers.includes(h));
-    if (missing.length) {
-      headers = headers.concat(missing);
-      await api("/values/" + q(`${t}!1:1`) + "?valueInputOption=USER_ENTERED", {
-        method: "PUT",
-        body: JSON.stringify({ values: [headers] }),
-      });
-    }
     } // end !isMapped()
+
+    // Ensure a column exists for every field the user chose to SHOW (by its
+    // mapped/standard name), plus the app-managed columns. Missing ones are
+    // appended. This runs even for mapped files, so showing a new field creates
+    // its column. Hidden fields are never created.
+    if (state.canWrite) {
+      const wanted = FIELD_DEFS.filter((fd) => !hiddenOf(fd.key)).map((fd) => colName(fd.key));
+      ["Listen Count", "Last Listened", "Rating"].forEach((c) => wanted.push(c));
+      const missing = [...new Set(wanted)].filter((c) => c && !headers.includes(c));
+      if (missing.length) {
+        headers = headers.concat(missing);
+        await api("/values/" + q(`${t}!1:1`) + "?valueInputOption=USER_ENTERED", {
+          method: "PUT",
+          body: JSON.stringify({ values: [headers] }),
+        });
+      }
+    }
     state.headers = headers;
     state.col = {};
     headers.forEach((h, i) => { state.col[h] = i; });
@@ -1113,6 +1123,8 @@
     SETTINGS.defaults = SETTINGS.defaults || {};
     SETTINGS.wish = SETTINGS.wish || {};
     const prevWish = JSON.stringify(SETTINGS.wish);
+    const prevHidden = JSON.stringify(SETTINGS.hidden);
+    const prevMap = JSON.stringify(SETTINGS.map) + JSON.stringify(SETTINGS.wishMap);
     const newLists = {};
     FIELD_DEFS.forEach((fd) => {
       const lin = document.querySelector(`.admin-label[data-akey="${fd.key}"]`);
@@ -1154,14 +1166,18 @@
         await fixValidation().catch(() => {});
       }
       closeAdmin();
-      const wishChanged = JSON.stringify(SETTINGS.wish) !== prevWish;
+      // Any of these can change which columns should exist → re-run setup.
+      const structureChanged =
+        JSON.stringify(SETTINGS.wish) !== prevWish ||
+        JSON.stringify(SETTINGS.hidden) !== prevHidden ||
+        (JSON.stringify(SETTINGS.map) + JSON.stringify(SETTINGS.wishMap)) !== prevMap;
       if (prefCurrency() !== prevPref) {
         // Rename the cost column to the new currency, then prompt to recompute.
         await showApp();
         toast(`Cost column is now ${costColName()} — use “Recompute costs” to update existing rows`, 6000);
-      } else if (wishChanged) {
-        await showApp(); // add any new wishlist columns and reload
-        toast("Settings saved ✓ — wishlist fields updated");
+      } else if (structureChanged) {
+        await showApp(); // create any newly-needed columns and reload
+        toast("Settings saved ✓ — columns updated");
       } else {
         toast("Settings saved ✓");
       }
