@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "35";
+  const APP_VERSION = "36";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -170,6 +170,7 @@
     sheetId: "",            // active spreadsheet id (chosen at runtime)
     scope: "all",
     sortBy: "artist",       // display sort (the sheet itself stays Artist → Album)
+    sortDir: "asc",         // "asc" | "desc"
     addMode: "record",
     pendingWishRow: null,   // wish row to delete after "Got it" save
     editRow: null,          // collection row being edited (null = adding)
@@ -500,19 +501,22 @@
 
   // Display comparator for the sort picker. Blanks always sink to the bottom,
   // and Artist → Album is the tiebreaker so equal keys stay predictable.
-  function makeCmp(key) {
+  // `dir` flips the value comparison only — blanks always sort last and ties
+  // fall back to Artist→Album ascending, regardless of direction.
+  function makeCmp(key, dir) {
+    const s = dir === "desc" ? -1 : 1;
     const blank = (v) => (v == null || String(v).trim() === "" ? 1 : 0);
-    if (key === "listens") { // most-played first
-      return (a, b) => (b.listens || 0) - (a.listens || 0) || byArtistTitle(a, b);
+    if (key === "listens") {
+      return (a, b) => s * ((a.listens || 0) - (b.listens || 0)) || byArtistTitle(a, b);
     }
-    if (key === "lastListened") { // most recent first
+    if (key === "lastListened") {
       return (a, b) => blank(a.lastListened) - blank(b.lastListened) ||
-        String(b.lastListened || "").localeCompare(String(a.lastListened || "")) || byArtistTitle(a, b);
+        s * String(a.lastListened || "").localeCompare(String(b.lastListened || "")) || byArtistTitle(a, b);
     }
     const numeric = key === "yearReleased" || key === "year";
     return (a, b) =>
       blank(a[key]) - blank(b[key]) ||
-      String(a[key] || "").localeCompare(String(b[key] || ""), undefined, { sensitivity: "base", numeric }) ||
+      s * String(a[key] || "").localeCompare(String(b[key] || ""), undefined, { sensitivity: "base", numeric }) ||
       byArtistTitle(a, b);
   }
 
@@ -1599,13 +1603,26 @@
       return inCollectionSort(k) && inWishlistSort(k); // "all" → only fields common to both
     });
   }
+  // Counts/dates read best newest-first; text A→Z.
+  const defaultDir = (k) => (k === "listens" || k === "lastListened") ? "desc" : "asc";
+  function updateSortDirIcon() {
+    const b = $("#sort-dir");
+    if (b) { b.textContent = state.sortDir === "desc" ? "↓" : "↑"; b.title = state.sortDir === "desc" ? "Descending" : "Ascending"; }
+  }
+  function setSortField(key, keepDir) {
+    state.sortBy = key;
+    if (!keepDir) state.sortDir = defaultDir(key);
+    try { localStorage.setItem("sort33", state.sortBy); localStorage.setItem("sortdir33", state.sortDir); } catch (_) {}
+    updateSortDirIcon();
+  }
   function renderSortOptions() {
     const sel = $("#sort-by");
     if (!sel) return;
     const keys = sortableFields(state.scope);
     sel.innerHTML = keys.map((k) => `<option value="${k}">${esc(sortLabel(k))}</option>`).join("");
-    if (!keys.includes(state.sortBy)) state.sortBy = keys[0] || "artist";
+    if (!keys.includes(state.sortBy)) setSortField(keys[0] || "artist");
     sel.value = state.sortBy;
+    updateSortDirIcon();
   }
 
   // ---------- search & render ----------
@@ -1621,7 +1638,7 @@
     const out = [];
 
     // Copy before sorting — state.collection/wishlist stay in sheet order.
-    const cmp = makeCmp(state.sortBy);
+    const cmp = makeCmp(state.sortBy, state.sortDir);
     const colHits = (terms.length ? state.collection.filter((i) => matches(i, terms)) : state.collection).slice().sort(cmp);
     const wishHits = (terms.length ? state.wishlist.filter((i) => matches(i, terms)) : state.wishlist).slice().sort(cmp);
 
@@ -2268,8 +2285,13 @@
     });
     $("#search-input").addEventListener("input", render);
     $("#sort-by").addEventListener("change", (ev) => {
-      state.sortBy = ev.target.value;
-      try { localStorage.setItem("sort33", state.sortBy); } catch (_) {}
+      setSortField(ev.target.value); // resets to the field's natural direction
+      render();
+    });
+    $("#sort-dir").addEventListener("click", () => {
+      state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
+      try { localStorage.setItem("sortdir33", state.sortDir); } catch (_) {}
+      updateSortDirIcon();
       render();
     });
     document.querySelectorAll(".segments [data-scope]").forEach((b) =>
@@ -2390,6 +2412,7 @@
     if (ver) ver.textContent = "v" + APP_VERSION;
     state.sheetId = localStorage.getItem("sheetId33") || CONFIG_SHEET || "";
     state.sortBy = localStorage.getItem("sort33") || "artist";
+    state.sortDir = localStorage.getItem("sortdir33") || defaultDir(state.sortBy);
     wire();
     renderSortOptions(); // scope-aware sort choices (default scope = "all")
     applySettings(); // populate form labels with defaults until settings load
