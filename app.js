@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "40";
+  const APP_VERSION = "41";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -167,6 +167,7 @@
     wishHeaders: [],        // wishlist header row
     wishCol: {},            // wishlist header name -> index
     canWrite: true,         // false when the user only has view access
+    setupConfirmed: false,  // per-session: user confirmed the sheet in Setup
     sheetId: "",            // active spreadsheet id (chosen at runtime)
     scope: "all",
     sortBy: "artist",       // display sort (the sheet itself stays Artist → Album)
@@ -2369,13 +2370,16 @@
     } catch (_) {
       toast("Saved locally, but couldn't write everything to the sheet");
     } finally { setBusy(false); }
+    state.setupConfirmed = true; // confirmed → let showApp load the app
     showApp();
   }
 
   async function showApp() {
     $("#signin-view").classList.add("hidden");
     $("#app-view").classList.remove("hidden");
-    if (!state.sheetId) { openSheetModal(true); return; } // must pick a sheet first
+    if (!state.sheetId) { openSheetModal(true); return; }   // must pick a sheet first
+    // Always confirm the sheet once per session before loading it.
+    if (!state.setupConfirmed) { openSheetModal(false); return; }
     const hadCache = loadCache();
     if (hadCache) render();
     setBusy(true);
@@ -2424,7 +2428,17 @@
     $("#sheet-btn").addEventListener("click", () => openSheetModal(false));
     $("#refresh-btn").addEventListener("click", showApp);
 
-    $("#sheet-cancel").addEventListener("click", closeSheetModal);
+    $("#sheet-cancel").addEventListener("click", () => {
+      // On the once-per-session confirmation gate, Cancel just proceeds with the
+      // current sheet/settings. Otherwise (opened later) it simply closes.
+      if (state.sheetId && !state.setupConfirmed) {
+        state.setupConfirmed = true;
+        closeSheetModal();
+        showApp();
+      } else {
+        closeSheetModal();
+      }
+    });
     const setupSheetId = () => {
       const id = parseSheetId($("#sheet-form").sheeturl.value);
       const err = $("#sheet-error");

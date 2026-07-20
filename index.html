@@ -156,10 +156,12 @@
     <form id="sheet-form" class="form" novalidate>
       <!-- Step 1: the file -->
       <p class="setup-step">Step 1 — your sheet</p>
+      <p class="sheet-help">Confirm this is the sheet you're working with, then <b>Continue</b>.
+        To switch sheets or change the mapping, tick the box below.</p>
       <label>Sheet URL or ID
         <input name="sheeturl" autocomplete="off" placeholder="https://docs.google.com/spreadsheets/d/…" />
       </label>
-      <label class="setup-check"><input type="checkbox" id="setup-file-ok" /> This is my sheet — load its tabs</label>
+      <label class="setup-check"><input type="checkbox" id="setup-file-ok" /> Change sheet / tabs / mapping — load its tabs</label>
 
       <!-- Step 2: the tabs -->
       <div id="sheet-tabs" class="hidden">
@@ -188,7 +190,7 @@
       <p id="sheet-error" class="dup hidden"></p>
       <div class="form-actions">
         <button type="button" id="sheet-cancel" class="btn">Cancel</button>
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="btn btn-primary">Continue</button>
       </div>
     </form>
   </section>
