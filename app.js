@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "39";
+  const APP_VERSION = "40";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -1805,7 +1805,8 @@
     set("#add-btn", ro);            // the + FAB
     set("#viewonly-badge", !ro);    // "View only" indicator
     set("#admin-btn", ro);          // Settings (writes 33Settings)
-    set("#fill-genres-btn", ro);    // Fill genres (writes)
+    set("#fill-genres-btn", ro);    // Fill album info (writes)
+    set("#batch-btn", ro);          // Batch edit (writes)
     set("#detail-edit", ro);
     set("#detail-delete", ro);
   }
@@ -1984,6 +1985,82 @@
   // Backfill missing Genre / Year Released / Label across the collection and
   // wishlist from the internet. Only blank cells whose column exists (and, on
   // the wishlist, is enabled) are touched. Rate-limited to ~1 request/second.
+  // ---------- batch edit ----------
+  // Editable fields for the current tab (exclude Artist/Title — batch-setting
+  // those is almost always a mistake).
+  function batchFields(scope) {
+    return FIELD_DEFS.map((fd) => fd.key).filter((k) => {
+      if (CORE_FIELDS.includes(k)) return false;
+      if (scope === "collection") return !hiddenOf(k);
+      if (scope === "wishlist") return onWish(k);
+      return !hiddenOf(k) && onWish(k); // "all" → common to both
+    });
+  }
+  // The records the batch will touch = the full current filter (not the 80 shown).
+  function batchRecords() {
+    return {
+      col: state.scope !== "wishlist" ? (render._colHits || []) : [],
+      wish: state.scope !== "collection" ? (render._wishHits || []) : [],
+    };
+  }
+  function batchValueControl() {
+    const key = $("#batch-field").value;
+    const input = $("#batch-value");
+    input.type = key === "date" ? "date" : "text";
+    input.value = "";
+    const lov = key === "country" ? COUNTRY_VALUES : (listOf(key) || []);
+    $("#batch-lov").innerHTML = lov.map((v) => `<option value="${esc(v)}">`).join("");
+    if (lov.length) input.setAttribute("list", "batch-lov"); else input.removeAttribute("list");
+  }
+  function openBatch() {
+    const keys = batchFields(state.scope);
+    $("#batch-field").innerHTML = keys.map((k) => `<option value="${k}">${esc(labelOf(k))}</option>`).join("");
+    const { col, wish } = batchRecords();
+    $("#batch-count").textContent = col.length + wish.length;
+    $("#batch-scope").textContent = state.scope === "all" ? "collection + wishlist" : state.scope;
+    $("#batch-blank-only").checked = false;
+    batchValueControl();
+    $("#batch-modal").classList.remove("hidden");
+    $("#sheet-backdrop").classList.remove("hidden");
+  }
+  function closeBatch() {
+    $("#batch-modal").classList.add("hidden");
+    $("#sheet-backdrop").classList.add("hidden");
+  }
+  async function applyBatch() {
+    const key = $("#batch-field").value;
+    if (!key) return;
+    const val = $("#batch-value").value.trim();
+    const blankOnly = $("#batch-blank-only").checked;
+    const a1 = (tab, c, r) => "'" + String(tab).replace(/'/g, "''") + "'!" + c + r;
+    const { col, wish } = batchRecords();
+    const data = [];
+    const ci = state.col[colName(key)];
+    if (ci !== undefined) col.forEach((rec) => {
+      if (blankOnly && String(rec[key] || "").trim()) return;
+      data.push({ range: a1(state.collectionSheet.title, colLetter(ci), rec.row), values: [[val]] });
+    });
+    if (state.wishlistSheet) {
+      const wi = state.wishCol[wishColName(key)];
+      if (wi !== undefined) wish.forEach((rec) => {
+        if (blankOnly && String(rec[key] || "").trim()) return;
+        data.push({ range: a1(state.wishlistSheet.title, colLetter(wi), rec.row), values: [[val]] });
+      });
+    }
+    if (!data.length) return toast("Nothing to update");
+    if (!confirm(`Set ${labelOf(key)} = "${val || "(blank)"}" on ${data.length} record${data.length > 1 ? "s" : ""}?`)) return;
+    setBusy(true);
+    try {
+      await api("/values:batchUpdate", { method: "POST", body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }) });
+      await loadData(); render();
+      closeBatch();
+      toast(`Updated ${data.length} record${data.length > 1 ? "s" : ""} ✓`);
+    } catch (e) {
+      console.error("33&Me: batch update failed:", e);
+      toast("Couldn't update — are you online?");
+    } finally { setBusy(false); }
+  }
+
   async function fillAlbumInfo() {
     const a1 = (tab, col, row) => "'" + String(tab).replace(/'/g, "''") + "'!" + col + row;
     const FIELDS = ["genre", "yearReleased", "label"];
@@ -2340,6 +2417,10 @@
     });
     $("#signout-btn").addEventListener("click", signOut);
     $("#fill-genres-btn").addEventListener("click", fillAlbumInfo);
+    $("#batch-btn").addEventListener("click", openBatch);
+    $("#batch-cancel").addEventListener("click", closeBatch);
+    $("#batch-apply").addEventListener("click", applyBatch);
+    $("#batch-field").addEventListener("change", batchValueControl);
     $("#sheet-btn").addEventListener("click", () => openSheetModal(false));
     $("#refresh-btn").addEventListener("click", showApp);
 
@@ -2430,6 +2511,7 @@
       closeSheet();
       closeDetail();
       closeAdmin();
+      closeBatch();
       if (state.sheetId) closeSheetModal(); // don't let them dismiss the mandatory first-run picker
     });
     $("#cancel-add").addEventListener("click", closeSheet);

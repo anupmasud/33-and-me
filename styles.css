@@ -162,6 +162,10 @@ button { font-family: inherit; }
 .field-hint { color: var(--sleeve-dim); font-weight: 400; font-size: 12px; }
 .form input[readonly] { opacity: .65; cursor: default; }
 .field-hidden { display: none !important; }
+#batch-modal input:not([type="checkbox"]), #batch-modal select {
+  background: var(--crate-2); border: 1px solid var(--line); color: var(--sleeve);
+  border-radius: 8px; padding: 8px 10px; font-size: 14px; width: 100%;
+}
 .setup-step { color: var(--gold); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin: 14px 0 6px; }
 .setup-check { display: flex; align-items: center; gap: 8px; color: var(--sleeve); font-size: 14px; margin-top: 10px; cursor: pointer; }
 .setup-check input { width: 18px; height: 18px; accent-color: var(--gold); }

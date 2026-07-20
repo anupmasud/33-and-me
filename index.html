@@ -81,6 +81,7 @@
         <button id="admin-btn" class="linklike" title="Admin settings">Settings</button>
         <button id="sheet-btn" class="linklike" title="Choose the sheet and which tabs to use">Setup</button>
         <button id="fill-genres-btn" class="linklike" title="Look up missing genre, year released and label from the internet">Fill album info</button>
+        <button id="batch-btn" class="linklike" title="Set one field across the records currently shown">Batch edit</button>
         <button id="signout-btn" class="linklike">Sign out</button>
       </span>
     </footer>
@@ -235,6 +236,24 @@
       <button type="button" id="admin-reset" class="btn">Reset</button>
       <button type="button" id="admin-close" class="btn">Close</button>
       <button type="button" id="admin-save" class="btn btn-primary">Save</button>
+    </div>
+  </section>
+
+  <!-- ===================== Batch edit ===================== -->
+  <section id="batch-modal" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="batch-title">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <h2 id="batch-title" class="sheet-title">Batch edit</h2>
+    <p class="sheet-help">Set one field on the <b id="batch-count">0</b> record(s) currently shown
+      (<span id="batch-scope"></span>). Search or filter first to narrow them down.</p>
+    <div class="grid2">
+      <label>Field<select id="batch-field"></select></label>
+      <label>New value<input id="batch-value" autocomplete="off" list="batch-lov" /></label>
+    </div>
+    <datalist id="batch-lov"></datalist>
+    <label class="setup-check"><input type="checkbox" id="batch-blank-only" /> Only fill blank cells (don't overwrite existing values)</label>
+    <div class="form-actions">
+      <button type="button" id="batch-cancel" class="btn">Cancel</button>
+      <button type="button" id="batch-apply" class="btn btn-primary">Apply</button>
     </div>
   </section>
 
