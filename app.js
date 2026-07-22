@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "44";
+  const APP_VERSION = "45";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -70,7 +70,7 @@
     "United Kingdom", "United States", "Uruguay", "Uzbekistan", "Venezuela",
     "Vietnam", "Yemen", "Zambia", "Zimbabwe",
   ];
-  const VALIDATION_VERSION = "v8";
+  const VALIDATION_VERSION = "v9";
 
   // ---------- admin settings (Phase 1) ----------
   // Editable per-field settings. Defaults here; overrides load from a hidden
@@ -635,8 +635,8 @@
     // 2. Re-apply the dropdowns, pointing at the hidden lookup tab's ranges.
     // Range-based validation has no length limit, and the dropdown tracks the
     // range's contents — so editing a list in Settings just rewrites that tab.
-    const rule = (colName, listCol) => {
-      const idx = state.col[colName];
+    const rule = (col, listCol) => {
+      const idx = state.col[col]; // `col` is a resolved header name
       if (idx === undefined) return;
       requests.push({
         setDataValidation: {
@@ -649,14 +649,14 @@
         },
       });
     };
-    rule("Condition", "D");
+    rule(colName("condition"), "D");
     rule("Rating", "E");
-    rule("Format", "C");
-    rule("Genre", "A");
-    rule("Country", "B");
+    rule(colName("format"), "C");
+    rule(colName("genre"), "A");
+    rule(colName("country"), "B");
 
     // Same Genre dropdown on the Wishlist tab, at whatever column Genre landed.
-    const wGenre = state.wishCol && state.wishCol["Genre"];
+    const wGenre = state.wishCol && state.wishCol[wishColName("genre")];
     if (state.wishlistSheet && wGenre !== undefined) {
       requests.push({
         setDataValidation: {
@@ -671,8 +671,8 @@
     }
 
     // 3. Fix number/date formats on the columns the app writes.
-    const fmt = (colName, numberFormat) => {
-      const idx = state.col[colName];
+    const fmt = (col, numberFormat) => {
+      const idx = state.col[col];
       if (idx === undefined) return;
       requests.push({
         repeatCell: {
@@ -685,7 +685,7 @@
     const datePattern = SETTINGS.dateFormat || "yyyy-mm-dd";
     fmt("Listen Count", { type: "NUMBER", pattern: "0" });
     fmt("Last Listened", { type: "DATE", pattern: datePattern });
-    fmt("Date", { type: "DATE", pattern: datePattern });
+    fmt(colName("date"), { type: "DATE", pattern: datePattern });
 
     await api(":batchUpdate", { method: "POST", body: JSON.stringify({ requests }) });
     return true;
