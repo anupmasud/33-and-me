@@ -185,6 +185,7 @@
         <h3 class="admin-subhead">Wishlist tab</h3>
         <div id="setup-wmap-fields" class="setup-map-fields"></div>
         <label class="setup-check"><input type="checkbox" id="setup-rename" /> Also rename my columns to these tidy names in the sheet</label>
+        <label class="setup-check"><input type="checkbox" id="setup-delempty" /> Also remove fully-blank rows from these tabs</label>
       </div>
 
       <p id="sheet-error" class="dup hidden"></p>
@@ -227,6 +228,7 @@
     <div class="admin-tools">
       <button type="button" id="admin-setup" class="btn">Setup: sheet &amp; tabs</button>
       <button type="button" id="admin-recompute" class="btn">Recompute costs</button>
+      <button type="button" id="admin-delempty" class="btn">Remove blank rows</button>
     </div>
     <h3 class="admin-subhead">Dropdown values <span class="field-hint">— one per line</span></h3>
     <div class="grid2">

@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "41";
+  const APP_VERSION = "42";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -2275,6 +2275,7 @@
     $("#setup-file-ok").checked = false;
     $("#setup-tabs-ok").checked = false;
     $("#setup-rename").checked = false;
+    $("#setup-delempty").checked = false;
     form.sheeturl.value = state.sheetId ? sheetUrl(state.sheetId) : "";
     // On mandatory first run (no sheet yet) there's nothing to cancel back to.
     $("#sheet-cancel").classList.toggle("hidden", !!firstRun && !state.sheetId);
@@ -2308,13 +2309,42 @@
 
   // Like api() but against an explicit spreadsheet id (setup may target a sheet
   // we haven't switched to yet).
-  async function api2(id, path, opts) {
+  async function api2(id, path, opts = {}) {
     const token = await getToken(false).catch(() => getToken(true));
     const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}${path}`, {
       ...opts, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", ...(opts.headers || {}) },
     });
     if (!res.ok) throw new Error("Sheets API " + res.status);
     return res.json();
+  }
+
+  // Delete fully-blank data rows (all cells empty) from a tab. Returns the count
+  // removed. Deletes contiguous blocks bottom-up so row indices stay valid.
+  async function deleteEmptyRows(id, tab) {
+    const props = (await api2(id, "?fields=sheets.properties")).sheets.map((s) => s.properties);
+    const sheet = props.find((s) => sameName(s.title, tab));
+    if (!sheet) return 0;
+    const qTab = q("'" + String(tab).replace(/'/g, "''") + "'");
+    const rows = (await api2(id, "/values/" + qTab)).values || [];
+    const empty = [];
+    for (let i = 1; i < rows.length; i++) { // skip header (row index 0)
+      const r = rows[i] || [];
+      if (r.every((c) => c == null || String(c).trim() === "")) empty.push(i);
+    }
+    if (!empty.length) return 0;
+    empty.sort((a, b) => a - b);
+    const ranges = [];
+    let s = empty[0], p = empty[0];
+    for (let k = 1; k < empty.length; k++) {
+      if (empty[k] === p + 1) p = empty[k];
+      else { ranges.push([s, p + 1]); s = empty[k]; p = empty[k]; }
+    }
+    ranges.push([s, p + 1]);
+    const requests = ranges.sort((a, b) => b[0] - a[0]).map(([st, en]) => ({
+      deleteDimension: { range: { sheetId: sheet.sheetId, dimension: "ROWS", startIndex: st, endIndex: en } },
+    }));
+    await api2(id, ":batchUpdate", { method: "POST", body: JSON.stringify({ requests }) });
+    return empty.length;
   }
 
   // Apply the chosen sheet + tabs + mappings, then reload the app.
@@ -2359,6 +2389,11 @@
         // Rewrite the users' headers to the tidy app names, then map = identity.
         map = await tidyHeaders(id, $("#setup-collection").value, map, (k) => FIELD_COLS[k] || k);
         if (!wishIsNew) wishMap = await tidyHeaders(id, wishVal, wishMap, (k) => WISH_COL[k] || FIELD_COLS[k] || k);
+      }
+      if (mapShown && $("#setup-delempty").checked) {
+        let n = await deleteEmptyRows(id, $("#setup-collection").value).catch(() => 0);
+        if (!wishIsNew) n += await deleteEmptyRows(id, wishVal).catch(() => 0);
+        if (n) toast(`Removed ${n} blank row${n > 1 ? "s" : ""}`, 4000);
       }
       if (tabsShown) {
         SETTINGS.collectionTab = $("#setup-collection").value || "";
@@ -2520,6 +2555,20 @@
     $("#admin-save").addEventListener("click", saveAdmin);
     $("#admin-reset").addEventListener("click", () => renderAdmin(defaultSettings()));
     $("#admin-recompute").addEventListener("click", () => { closeAdmin(); recomputeCosts(); });
+    $("#admin-delempty").addEventListener("click", async () => {
+      closeAdmin();
+      if (!confirm("Remove fully-blank rows from the collection and wishlist tabs?")) return;
+      setBusy(true);
+      try {
+        let n = await deleteEmptyRows(state.sheetId, state.collectionSheet.title).catch(() => 0);
+        if (state.wishlistSheet) n += await deleteEmptyRows(state.sheetId, state.wishlistSheet.title).catch(() => 0);
+        await loadData(); render();
+        toast(`Removed ${n} blank row${n !== 1 ? "s" : ""} ✓`);
+      } catch (e) {
+        console.error("33&Me: remove blank rows failed:", e);
+        toast("Couldn't remove blank rows — are you online?");
+      } finally { setBusy(false); }
+    });
     $("#admin-setup").addEventListener("click", () => { closeAdmin(); openSheetModal(false); });
     $("#sheet-backdrop").addEventListener("click", () => {
       closeSheet();
