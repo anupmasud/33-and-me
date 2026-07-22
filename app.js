@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "42";
+  const APP_VERSION = "43";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -300,6 +300,18 @@
     }
   }
 
+  // Insert `name` as the very first column of a tab if it isn't already present.
+  async function ensureFirstCol(sheetProps, headers, name) {
+    if (!state.canWrite || headers.includes(name)) return headers;
+    await api(":batchUpdate", {
+      method: "POST",
+      body: JSON.stringify({ requests: [{ insertDimension: { range: { sheetId: sheetProps.sheetId, dimension: "COLUMNS", startIndex: 0, endIndex: 1 }, inheritFromBefore: false } }] }),
+    });
+    await api("/values/" + q(`'${sheetProps.title}'!A1`) + "?valueInputOption=USER_ENTERED",
+      { method: "PUT", body: JSON.stringify({ values: [[name]] }) });
+    return [name, ...headers];
+  }
+
   async function ensureSetup() {
     let sheets = (await api("?fields=sheets.properties")).sheets.map((s) => s.properties);
     const usable = sheets.filter((s) => !isAppTab(s.title));
@@ -339,6 +351,7 @@
       const wt = state.wishlistSheet.title;
       let wh = ((await api("/values/" + q(`${wt}!1:1`))).values || [[]])[0] || [];
       if (!wh.length) wh = WISH_HEADER.slice();
+      wh = await ensureFirstCol(state.wishlistSheet, wh, "SN"); // sequence column first
       const need = [];
       FIELD_DEFS.forEach((fd) => {
         if (onWish(fd.key) && !wh.includes(wishColName(fd.key))) need.push(wishColName(fd.key));
@@ -360,6 +373,7 @@
     // ensure app columns exist on the collection header row
     const t = state.collectionSheet.title;
     let headers = ((await api("/values/" + q(`${t}!1:1`))).values || [[]])[0] || [];
+    headers = await ensureFirstCol(state.collectionSheet, headers, "SN"); // sequence column first
 
     // When the user has mapped their own columns, or only has view access,
     // don't impose the app's schema — just use their file as-is.
@@ -546,22 +560,45 @@
     });
   }
 
-  // Sort the collection tab by Artist, then album title.
+  // Sort the collection tab by Artist, then album title (mapping-aware).
   async function sortCollection() {
-    const aIdx = state.col["Artist"];
+    const aIdx = state.col[colName("artist")];
     if (aIdx === undefined) return;
-    const tIdx = state.col["Album Name"] !== undefined ? state.col["Album Name"] : state.col["Title"];
+    const tIdx = state.col[colName("title")] !== undefined ? state.col[colName("title")] : state.col["Title"];
     const specs = [{ dimensionIndex: aIdx, sortOrder: "ASCENDING" }];
     if (tIdx !== undefined) specs.push({ dimensionIndex: tIdx, sortOrder: "ASCENDING" });
     await sortSheet(state.collectionSheet, specs, state.headers.length);
   }
 
   async function sortWishlist() {
-    const a = state.wishCol["Artist"], t = state.wishCol["Title"];
+    const a = state.wishCol[wishColName("artist")], t = state.wishCol[wishColName("title")];
     const specs = [];
     if (a !== undefined) specs.push({ dimensionIndex: a, sortOrder: "ASCENDING" });
     if (t !== undefined) specs.push({ dimensionIndex: t, sortOrder: "ASCENDING" });
     await sortSheet(state.wishlistSheet, specs, (state.wishHeaders || []).length || 5);
+  }
+
+  // Fill the SN column with a self-renumbering formula for `count` data rows
+  // (records sort to the top, so rows 2..count+1). Skips if already done.
+  async function numberSN(tab, snIdx, count) {
+    if (snIdx === undefined || !count) return;
+    const col = colLetter(snIdx);
+    const cur = await api("/values/" + q(`'${tab}'!${col}2`) + "?valueRenderOption=FORMULA").catch(() => null);
+    const a2 = cur && cur.values && cur.values[0] && cur.values[0][0];
+    if (a2 === "=ROW()-1") return; // already numbered
+    const values = Array.from({ length: count }, () => ["=ROW()-1"]);
+    await api("/values/" + q(`'${tab}'!${col}2:${col}${count + 1}`) + "?valueInputOption=USER_ENTERED",
+      { method: "PUT", body: JSON.stringify({ values }) });
+  }
+
+  // Keep both tabs sorted (Artist → Album) and the SN column numbered.
+  async function maintainSheets() {
+    await sortCollection().catch(() => {});
+    await numberSN(state.collectionSheet.title, state.col["SN"], state.collection.length).catch(() => {});
+    if (state.wishlistSheet) {
+      await sortWishlist().catch(() => {});
+      await numberSN(state.wishlistSheet.title, state.wishCol["SN"], state.wishlist.length).catch(() => {});
+    }
   }
 
   // The duplicated sheet had stray "Yes/No" dropdowns across many columns and
@@ -930,8 +967,7 @@
     const width = state.headers.length;
     const row = new Array(width).fill("");
     const put = (name, val) => { if (state.col[name] !== undefined) row[state.col[name]] = val; };
-    const maxSN = state.collection.reduce((m) => m + 1, 1);
-    put("SN", String(maxSN));
+    put("SN", "=ROW()-1"); // self-renumbering sequence
     const putf = (key, val) => put(colName(key), val);
     FIELD_DEFS.forEach((fd) => putf(fd.key, f[fd.key]));
     if (!mapped("title")) put("Title", f.title);            // legacy column names
@@ -1251,6 +1287,7 @@
     const row = new Array((state.wishHeaders || []).length || 5).fill("");
     const wput = (colName, val) => { const i = state.wishCol[colName]; if (i !== undefined) row[i] = val; };
     FIELD_DEFS.forEach((fd) => { if (onWish(fd.key)) wput(wishColName(fd.key), f[fd.key] || ""); });
+    wput("SN", "=ROW()-1"); // self-renumbering sequence
     wput("Added", todayISO());
     setBusy(true);
     try {
@@ -2429,7 +2466,9 @@
       if (state.canWrite) {
         syncLists()
           .catch((e) => console.error("33&Me: list sync failed:", e))
-          .then(() => maybeFixValidation()); // never blocks showing records
+          .then(() => maybeFixValidation())
+          .then(() => maintainSheets()) // keep tabs sorted + SN numbered
+          .catch(() => {});
       }
     } catch (e) {
       if (hadCache) {
