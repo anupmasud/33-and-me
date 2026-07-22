@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "43";
+  const APP_VERSION = "44";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -300,10 +300,25 @@
     }
   }
 
-  // Insert `name` as the very first column of a tab if it isn't already present.
+  // Make `name` the very first column of a tab: move it to the front if it's
+  // elsewhere, or create it at the front if it's missing.
   async function ensureFirstCol(sheetProps, headers, name) {
-    if (!state.canWrite || headers.includes(name)) return headers;
-    await api(":batchUpdate", {
+    if (!state.canWrite) return headers;
+    const i = headers.indexOf(name);
+    if (i === 0) return headers; // already first
+    if (i > 0) {                 // exists elsewhere → move column (with its data) to front
+      await api(":batchUpdate", {
+        method: "POST",
+        body: JSON.stringify({ requests: [{ moveDimension: {
+          source: { sheetId: sheetProps.sheetId, dimension: "COLUMNS", startIndex: i, endIndex: i + 1 },
+          destinationIndex: 0,
+        } }] }),
+      });
+      const arr = headers.slice();
+      arr.unshift(arr.splice(i, 1)[0]);
+      return arr;
+    }
+    await api(":batchUpdate", {       // missing → insert a new first column
       method: "POST",
       body: JSON.stringify({ requests: [{ insertDimension: { range: { sheetId: sheetProps.sheetId, dimension: "COLUMNS", startIndex: 0, endIndex: 1 }, inheritFromBefore: false } }] }),
     });
