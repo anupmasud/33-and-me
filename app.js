@@ -19,7 +19,7 @@
 
   // Shown in the footer so you can tell which build you're running. Bump this
   // (and the SW cache in sw.js) on each deploy.
-  const APP_VERSION = "45";
+  const APP_VERSION = "46";
 
   // Columns the app guarantees exist on the collection tab.
   const APP_COLUMNS = ["City", "Country", "Format", "Condition", "Listen Count", "Last Listened", "Rating", "Notes"];
@@ -185,6 +185,39 @@
   const $ = (sel) => document.querySelector(sel);
   const norm = (s) => (s || "").toString().toLowerCase()
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  // Looser matcher for pairing a user's column header with an app field:
+  // ignores case, accents, anything in parentheses ("Artist(s)" -> "artist"),
+  // and punctuation, so small formatting differences still line up.
+  const mapKey = (s) => (s || "").toString().toLowerCase().normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "").replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  // Common header synonyms per field, so auto-mapping recognises real-world
+  // sheets ("Artist(s)", "Album", "Comments", ...). Kept deliberately narrow
+  // to avoid mis-pairing (e.g. no "source" under location -> wishlist "Source").
+  const FIELD_ALIASES = {
+    artist: ["artist", "artists", "artist name", "band", "performer"],
+    title: ["title", "album", "album name", "album title", "record"],
+    label: ["label", "record label"],
+    yearReleased: ["year released", "release year", "released", "year of release"],
+    genre: ["genre", "genres", "style"],
+    format: ["format", "media"],
+    condition: ["condition", "grade"],
+    location: ["location", "where bought", "bought at", "shop", "store"],
+    city: ["city", "town"],
+    country: ["country", "nation"],
+    price: ["price", "amount paid", "cost", "original cost", "paid"],
+    currency: ["currency", "paid in", "original currency"],
+    year: ["year", "year bought", "purchase year"],
+    date: ["date", "date bought", "purchase date", "bought on"],
+    notes: ["notes", "note", "comments", "remarks"],
+  };
+  // Find an existing header that corresponds to `key` (fuzzy). "" if none.
+  const fuzzyCol = (headers, key) => {
+    const aliases = (FIELD_ALIASES[key] || [])
+      .concat([FIELD_COLS[key], WISH_COL[key], labelOf(key)].filter(Boolean))
+      .map(mapKey);
+    return (headers || []).find((h) => aliases.includes(mapKey(h))) || "";
+  };
   const todayISO = () => new Date().toISOString().slice(0, 10);
   const colLetter = (i) => { // 0-based index -> A1 letter
     let s = ""; i += 1;
@@ -367,6 +400,19 @@
       let wh = ((await api("/values/" + q(`${wt}!1:1`))).values || [[]])[0] || [];
       if (!wh.length) wh = WISH_HEADER.slice();
       wh = await ensureFirstCol(state.wishlistSheet, wh, "SN"); // sequence column first
+      // Adopt an existing variant column for any wish-enabled field that isn't
+      // explicitly mapped (e.g. "Artist(s)" for artist), so we read the user's
+      // real data instead of creating an empty shadow column. Never overrides
+      // an explicit mapping.
+      let wmapChanged = false;
+      FIELD_DEFS.forEach((fd) => {
+        if (!onWish(fd.key)) return;
+        if (SETTINGS.wishMap && SETTINGS.wishMap[fd.key]) return; // explicit choice wins
+        if (wh.includes(wishColName(fd.key))) return;             // default column already there
+        const hit = fuzzyCol(wh, fd.key);
+        if (hit) { SETTINGS.wishMap = SETTINGS.wishMap || {}; SETTINGS.wishMap[fd.key] = hit; wmapChanged = true; }
+      });
+      if (wmapChanged && state.canWrite) await saveSettings().catch(() => {});
       const need = [];
       FIELD_DEFS.forEach((fd) => {
         if (onWish(fd.key) && !wh.includes(wishColName(fd.key))) need.push(wishColName(fd.key));
@@ -389,6 +435,18 @@
     const t = state.collectionSheet.title;
     let headers = ((await api("/values/" + q(`${t}!1:1`))).values || [[]])[0] || [];
     headers = await ensureFirstCol(state.collectionSheet, headers, "SN"); // sequence column first
+
+    // Adopt existing variant columns for any shown field that isn't explicitly
+    // mapped, so we read real data instead of creating empty shadow columns.
+    let mapChanged = false;
+    FIELD_DEFS.forEach((fd) => {
+      if (hiddenOf(fd.key)) return;
+      if (SETTINGS.map && SETTINGS.map[fd.key]) return;     // explicit choice wins
+      if (headers.includes(colName(fd.key))) return;        // default column already there
+      const hit = fuzzyCol(headers, fd.key);
+      if (hit) { SETTINGS.map = SETTINGS.map || {}; SETTINGS.map[fd.key] = hit; mapChanged = true; }
+    });
+    if (mapChanged && state.canWrite) await saveSettings().catch(() => {});
 
     // When the user has mapped their own columns, or only has view access,
     // don't impose the app's schema — just use their file as-is.
@@ -2287,10 +2345,7 @@
   // Render one tab's mapping rows into `container`, pre-selecting the current
   // map or an auto-match against the tab's columns.
   function renderMapFields(container, columns, currentMap, attr) {
-    const auto = (key) => {
-      const w = [FIELD_COLS[key], WISH_COL[key], labelOf(key)].filter(Boolean).map(norm);
-      return columns.find((c) => w.includes(norm(c))) || "";
-    };
+    const auto = (key) => fuzzyCol(columns, key);
     $(container).innerHTML = FIELD_DEFS.map((fd) => {
       const cur = (currentMap && currentMap[fd.key]) || auto(fd.key);
       const req = CORE_FIELDS.includes(fd.key);
