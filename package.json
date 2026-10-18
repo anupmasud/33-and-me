@@ -1,0 +1,25 @@
+{
+  "name": "33-and-me",
+  "version": "1.0.0",
+  "description": "A personal record-collection PWA. Your Google Sheet **is** the database — the app reads and writes it directly. No server, no separate database, free hosting on GitHub Pages.",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anupmasud/33-and-me.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/anupmasud/33-and-me/issues"
+  },
+  "homepage": "https://github.com/anupmasud/33-and-me#readme",
+  "dependencies": {
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/ios": "^8.5.3"
+  }
+}
